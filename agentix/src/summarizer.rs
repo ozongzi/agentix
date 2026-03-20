@@ -16,6 +16,26 @@ use crate::error::ApiError;
 use crate::request::{Message, Request, UserContent};
 use crate::types::ProviderProtocol;
 
+// ── Token estimation ─────────────────────────────────────────────────────────
+
+/// Rough token estimate: total character count of all message text divided by 4.
+/// Good enough for Latin-script text; for CJK-heavy conversations set a lower
+/// `trigger_at` threshold since CJK chars are typically 1–2 tokens each.
+fn estimate_tokens(history: &[Message]) -> usize {
+    let chars: usize = history.iter().map(|m| match m {
+        Message::User(parts) => parts.iter().map(|p| match p {
+            crate::request::UserContent::Text(t) => t.len(),
+            crate::request::UserContent::Image(_) => 256,
+        }).sum::<usize>(),
+        Message::Assistant { content, reasoning, .. } => {
+            content.as_deref().map_or(0, str::len)
+                + reasoning.as_deref().map_or(0, str::len)
+        }
+        Message::ToolResult { content, .. } => content.len(),
+    }).sum();
+    chars / 4
+}
+
 // ── Trait ─────────────────────────────────────────────────────────────────────
 
 /// Decides when and how to compress conversation history.
@@ -160,8 +180,8 @@ impl Summarizer for SlidingWindowSummarizer {
 pub struct LlmSummarizer<P: ProviderProtocol> {
     client: ApiClient<P>,
     model: String,
-    /// History length that triggers summarization.
-    trigger_at: usize,
+    /// Estimated token count that triggers summarization.
+    trigger_tokens: usize,
     /// Number of most-recent messages to keep verbatim after summarization.
     keep_last: usize,
     /// Instruction sent to the model asking it to summarize.
@@ -173,15 +193,19 @@ impl<P: ProviderProtocol> LlmSummarizer<P> {
         Self {
             client,
             model: model.into(),
-            trigger_at: 30,
+            trigger_tokens: 80_000,
             keep_last: 6,
             prompt: "Summarize the following conversation concisely, preserving all important facts, decisions, and context. Output only the summary text.".to_string(),
         }
     }
 
-    /// Set the history length that triggers summarization (default: 30).
-    pub fn trigger_at(mut self, n: usize) -> Self {
-        self.trigger_at = n.max(self.keep_last + 1);
+    /// Set the estimated token count that triggers summarization (default: 80000).
+    ///
+    /// Token count is approximated as total character count of all message
+    /// content divided by 4, which is a reasonable heuristic for most
+    /// Latin-script text. For CJK-heavy conversations consider a lower value.
+    pub fn trigger_at(mut self, tokens: usize) -> Self {
+        self.trigger_tokens = tokens;
         self
     }
 
@@ -200,7 +224,7 @@ impl<P: ProviderProtocol> LlmSummarizer<P> {
 
 impl<P: ProviderProtocol> Summarizer for LlmSummarizer<P> {
     fn should_summarize(&self, history: &[Message]) -> bool {
-        history.len() >= self.trigger_at
+        estimate_tokens(history) >= self.trigger_tokens
     }
 
     fn summarize<'a>(

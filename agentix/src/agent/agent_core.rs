@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 
 use crate::api::ApiClient;
 use crate::request::{ResponseFormat, Message};
-use crate::summarizer::{NoOpSummarizer, Summarizer};
+use crate::summarizer::{LlmSummarizer, Summarizer};
 use crate::tool_trait::{Tool, ToolBundle};
 use tokio::sync::mpsc;
 
@@ -77,15 +77,16 @@ impl<P: ProviderProtocol> Agent<P> {
     pub(crate) fn from_parts(client: ApiClient<P>, model: impl Into<String>) -> Self {
         let (interrupt_tx, interrupt_rx) = mpsc::unbounded_channel();
         let (tool_inject_tx, tool_inject_rx) = mpsc::unbounded_channel();
+        let model: String = model.into();
         Self {
+            summarizer: Box::new(LlmSummarizer::new(client.clone(), &model)),
+            auto_summary: true,
             client,
             history: vec![],
             system_prompt: None,
-            summarizer: Box::new(NoOpSummarizer),
-            auto_summary: false,
             tool_bundle: ToolBundle::new(),
             streaming: false,
-            model: model.into(),
+            model,
             temperature: None,
             max_tokens: None,
             response_format: None,
