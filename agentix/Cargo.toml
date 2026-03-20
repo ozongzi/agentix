@@ -1,0 +1,51 @@
+[package]
+name = "agentix"
+version = "0.1.0"
+edition = "2024"
+description = "Multi-provider LLM agent framework for Rust — streaming, tool calls, DeepSeek, OpenAI, Anthropic, Gemini"
+authors = ["ozongzi <ozongzi@icloud.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ozongzi/agentix"
+readme = "../README.md"
+keywords = ["llm", "agent", "ai", "deepseek", "openai"]
+categories = ["api-bindings", "web-programming"]
+
+[features]
+mcp = [
+    "dep:rmcp",
+    "rmcp/client",
+    "rmcp/transport-child-process",
+    "rmcp/transport-streamable-http-client-reqwest",
+]
+mcp-server = [
+    "dep:rmcp",
+    "rmcp/server",
+    "rmcp/transport-io",
+    "rmcp/transport-streamable-http-server",
+    "dep:axum",
+]
+
+[dependencies]
+async-trait = "0.1"
+agentix-macros = { version = "0.1.0", path = "../agentix-macros" }
+eventsource-stream = "0.2.3"
+futures = "0.3.31"
+reqwest = { version = "0.13", features = ["json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1.49.0", features = ["full"] }
+thiserror = "1.0"
+
+# Tracing for observability and diagnostics
+tracing = "0.1"
+
+# Optional: MCP (Model Context Protocol) client / server support
+rmcp = { version = "1.1", optional = true }
+
+# Optional: HTTP server for mcp-server feature
+axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "tokio"] }
+
+[dev-dependencies]
+wiremock = "0.5"
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }

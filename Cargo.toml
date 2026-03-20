@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "agentix",
+    "agentix-macros",
+]
+resolver = "2"

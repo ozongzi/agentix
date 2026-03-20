@@ -1,0 +1,16 @@
+[package]
+name = "agentix-macros"
+version = "0.1.0"
+edition = "2024"
+description = "Procedural macros for agentix (provides the `tool` macro and related helpers)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ozongzi/agentix"
+authors = ["ozongzi <ozongzi@icloud.com>"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
