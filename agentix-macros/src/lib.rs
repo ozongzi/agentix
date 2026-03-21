@@ -23,22 +23,43 @@ fn extract_doc(attrs: &[syn::Attribute]) -> Vec<String> {
 
 fn parse_doc(lines: &[String]) -> (String, std::collections::HashMap<String, String>) {
     let mut desc_lines = vec![];
-    let mut params = std::collections::HashMap::new();
+    let mut params: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut current_param: Option<String> = None;
+
     for line in lines {
+        // Blank lines are ignored.
         if line.is_empty() {
             continue;
         }
+
+        // Indented lines or list markers are continuations of the previous param.
+        if current_param.is_some()
+            && (line.starts_with(' ')
+                || line.starts_with('\t')
+                || line.starts_with('-')
+                || line.starts_with('•'))
+        {
+            let key = current_param.as_ref().unwrap();
+            let entry = params.entry(key.clone()).or_default();
+            entry.push(' ');
+            entry.push_str(line.trim());
+            continue;
+        }
+
+        // `identifier: description` → param entry.
         if let Some((key, val)) = line.split_once(':') {
             let key = key.trim().to_string();
             let val = val.trim().to_string();
             if key.chars().all(|c| c.is_alphanumeric() || c == '_') && !val.is_empty() {
-                params.insert(key, val);
+                params.insert(key.clone(), val);
+                current_param = Some(key);
                 continue;
             }
         }
-        if params.is_empty() {
-            desc_lines.push(line.clone());
-        }
+
+        // Everything else goes into the function description.
+        current_param = None;
+        desc_lines.push(line.clone());
     }
     (desc_lines.join(" ").trim().to_string(), params)
 }
