@@ -78,7 +78,7 @@ pub use agent::{
 
 pub use api::ApiClient;
 pub use request::Message as ChatMessage;
-pub use request::{Request, ResponseFormat, ToolChoice, Message};
+pub use request::{Message, Request, ResponseFormat, ToolChoice};
 
 pub use error::ApiError;
 pub use summarizer::{LlmSummarizer, NoOpSummarizer, SlidingWindowSummarizer, Summarizer};
@@ -87,6 +87,7 @@ pub use tool_trait::Tool;
 pub use tool_trait::ToolBundle;
 
 pub use agentix_macros::tool;
+pub use schemars;
 
 #[cfg(feature = "mcp")]
 pub use mcp::McpTool;

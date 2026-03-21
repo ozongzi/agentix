@@ -64,74 +64,6 @@ fn parse_doc(lines: &[String]) -> (String, std::collections::HashMap<String, Str
     (desc_lines.join(" ").trim().to_string(), params)
 }
 
-/// Recursively map a `syn::Type` to a JSON Schema snippet.
-///
-/// Matches on the *structure* of the type rather than its string representation,
-/// so path aliases (`std::string::String`), references (`&str`), and generic
-/// wrappers (`Option<T>`, `Vec<T>`) all resolve correctly.
-fn type_to_json_schema(ty: &Type) -> TokenStream2 {
-    match ty {
-        // &str, &String, &T — strip the reference and recurse
-        Type::Reference(r) => type_to_json_schema(&r.elem),
-
-        Type::Path(tp) => {
-            // Only look at the final path segment so that
-            // `std::string::String` and `String` both work.
-            let seg = match tp.path.segments.last() {
-                Some(s) => s,
-                None => return unsupported(ty),
-            };
-
-            match seg.ident.to_string().as_str() {
-                "String" | "str" => quote!(serde_json::json!({"type": "string"})),
-                "bool" => quote!(serde_json::json!({"type": "boolean"})),
-                "f32" | "f64" => quote!(serde_json::json!({"type": "number"})),
-                "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32" | "i64"
-                | "i128" | "isize" => {
-                    quote!(serde_json::json!({"type": "integer"}))
-                }
-                // Option<T> — recurse into T
-                "Option" => match inner_type_arg(seg) {
-                    Some(inner) => type_to_json_schema(inner),
-                    None => unsupported(ty),
-                },
-                // Vec<T> — recurse into T for the items schema
-                "Vec" => match inner_type_arg(seg) {
-                    Some(inner) => {
-                        let items = type_to_json_schema(inner);
-                        quote!(serde_json::json!({"type": "array", "items": #items}))
-                    }
-                    None => unsupported(ty),
-                },
-                _ => unsupported(ty),
-            }
-        }
-
-        _ => unsupported(ty),
-    }
-}
-
-/// Emit a compile-time error pointing at the offending type.
-fn unsupported(ty: &Type) -> TokenStream2 {
-    syn::Error::new_spanned(
-        ty,
-        "unsupported type in #[tool]: use String, bool, f32/f64, \
-         an integer primitive, Vec<T>, or Option<T>",
-    )
-    .to_compile_error()
-}
-
-/// Extract the first generic type argument from a path segment, e.g. the `T`
-/// in `Option<T>` or `Vec<T>`.
-fn inner_type_arg(seg: &syn::PathSegment) -> Option<&Type> {
-    if let syn::PathArguments::AngleBracketed(args) = &seg.arguments
-        && let Some(syn::GenericArgument::Type(ty)) = args.args.first()
-    {
-        return Some(ty);
-    }
-    None
-}
-
 fn is_option(ty: &Type) -> bool {
     if let Type::Path(tp) = ty
         && let Some(seg) = tp.path.segments.last()
@@ -219,10 +151,13 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
         let prop_inserts = method.params.iter().map(|p| {
             let pname = &p.name;
             let pdesc = &p.desc;
-            let schema = type_to_json_schema(&p.ty);
+            let ty = &p.ty;
             quote! {{
-                let mut prop = #schema;
-                prop["description"] = serde_json::json!(#pdesc);
+                let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
+                let mut prop = serde_json::to_value(schema).unwrap();
+                if let Some(obj) = prop.as_object_mut() {
+                    obj.insert("description".to_string(), serde_json::json!(#pdesc));
+                }
                 properties.insert(#pname.to_string(), prop);
             }}
         });
@@ -233,19 +168,29 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
             .map(|p| p.name.as_str())
             .collect();
         quote! {{
+            let mut __gen = agentix::schemars::SchemaGenerator::default();
             let mut properties = serde_json::Map::new();
             #(#prop_inserts)*
+
             let required: Vec<&str> = vec![#(#required),*];
+            let mut parameters = serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            });
+
+            // 如果引入了复杂类型，提取 definitions 并注入到 $defs
+            let defs = __gen.take_definitions();
+            if !defs.is_empty() {
+                parameters["$defs"] = serde_json::to_value(defs).unwrap();
+            }
+
             agentix::raw::shared::ToolDefinition {
                 kind: agentix::raw::shared::ToolKind::Function,
                 function: agentix::raw::shared::FunctionDefinition {
                     name: #tool_name.to_string(),
                     description: Some(#description.to_string()),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                    }),
+                    parameters,
                     strict: None,
                 },
             }
@@ -364,10 +309,13 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         let prop_inserts = m.params.iter().map(|p| {
             let pname = &p.name;
             let pdesc = &p.desc;
-            let schema = type_to_json_schema(&p.ty);
+            let ty = &p.ty;
             quote! {{
-                let mut prop = #schema;
-                prop["description"] = serde_json::json!(#pdesc);
+                let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
+                let mut prop = serde_json::to_value(schema).unwrap();
+                if let Some(obj) = prop.as_object_mut() {
+                    obj.insert("description".to_string(), serde_json::json!(#pdesc));
+                }
                 properties.insert(#pname.to_string(), prop);
             }}
         });
@@ -378,19 +326,29 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             .map(|p| p.name.as_str())
             .collect();
         quote! {{
+            let mut __gen = agentix::schemars::SchemaGenerator::default();
             let mut properties = serde_json::Map::new();
             #(#prop_inserts)*
+
             let required: Vec<&str> = vec![#(#required),*];
+            let mut parameters = serde_json::json!({
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            });
+
+            // 同样为 impl 块内的参数注入可能生成的 definitions
+            let defs = __gen.take_definitions();
+            if !defs.is_empty() {
+                parameters["$defs"] = serde_json::to_value(defs).unwrap();
+            }
+
             agentix::raw::shared::ToolDefinition {
                 kind: agentix::raw::shared::ToolKind::Function,
                 function: agentix::raw::shared::FunctionDefinition {
                     name: #tool_name.to_string(),
                     description: Some(#description.to_string()),
-                    parameters: serde_json::json!({
-                        "type": "object",
-                        "properties": properties,
-                        "required": required,
-                    }),
+                    parameters,
                     strict: None,
                 },
             }
