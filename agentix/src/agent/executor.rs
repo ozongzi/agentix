@@ -160,63 +160,49 @@ pub(crate) async fn connect_stream<P: ProviderProtocol>(
     }
 }
 
-/// Execute all pending tool calls sequentially and collect results.
+/// Execute all pending tool calls in parallel and collect results.
 ///
-/// Interrupts that arrive during execution are buffered and appended to history
-/// only after all tool results are recorded, preventing history inconsistencies.
+/// All calls are dispatched concurrently via `join_all`; results are then
+/// collected in the original order and pushed to history together, so the
+/// history remains consistent regardless of completion order.
+/// Interrupts are drained once after all calls finish.
 pub(crate) async fn execute_tools<P: Send + 'static>(
     mut agent: Agent<P>,
     tool_calls: Vec<AgentToolCall>,
 ) -> (ToolsResult, Agent<P>) {
+    use std::sync::Arc;
+    use futures::future::join_all;
+
+    let bundle = Arc::new(&agent.tool_bundle);
+
+    let futures: Vec<_> = tool_calls
+        .iter()
+        .map(|tc| {
+            let bundle = Arc::clone(&bundle);
+            let name = tc.name.clone();
+            let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+            async move { bundle.call(&name, args).await }
+        })
+        .collect();
+
+    let call_results: Vec<Value> = join_all(futures).await;
+
     let mut results = Vec::with_capacity(tool_calls.len());
-    let mut buffered_interrupts: Vec<String> = Vec::new();
-
-    for tc in tool_calls {
-        let args: Value = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-        let result;
-        let mut aborted = false;
-
-        tokio::select! {
-            res = agent.tool_bundle.call(&tc.name, args.clone()) => {
-                result = res;
-            }
-            maybe_msg = agent.interrupt_rx.recv() => {
-                if let Some(msg) = maybe_msg {
-                    buffered_interrupts.push(msg);
-                    while let Ok(more) = agent.interrupt_rx.try_recv() {
-                        buffered_interrupts.push(more);
-                    }
-                }
-                result = serde_json::json!({ "error": "aborted by interrupt" });
-                aborted = true;
-            }
-        }
-
+    for (tc, result) in tool_calls.into_iter().zip(call_results) {
         agent.history.push(Message::ToolResult {
             call_id: tc.id.clone(),
             content: result.to_string(),
         });
-
         results.push(ToolCallResult {
             id: tc.id,
             name: tc.name,
             args: tc.arguments,
             result,
         });
-
-        if aborted {
-            break;
-        }
     }
 
     while let Ok(msg) = agent.interrupt_rx.try_recv() {
-        buffered_interrupts.push(msg);
-    }
-
-    for msg in buffered_interrupts {
-        agent
-            .history
-            .push(Message::User(vec![UserContent::Text(msg)]));
+        agent.history.push(Message::User(vec![UserContent::Text(msg)]));
     }
 
     (ToolsResult { results }, agent)
