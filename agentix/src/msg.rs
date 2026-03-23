@@ -44,6 +44,12 @@ pub enum AgentEvent {
     ToolCallChunk(crate::types::ToolCallChunk),
     /// The agent is calling a tool.
     ToolCall(ToolCall),
+    /// A tool is reporting progress or streaming intermediate output.
+    ToolProgress {
+        call_id: String,
+        name:    String,
+        progress: String,
+    },
     /// A tool has finished, here is the result.
     ToolResult {
         call_id: String,

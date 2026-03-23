@@ -3,59 +3,28 @@ use async_trait::async_trait;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
+use futures::stream::BoxStream;
+
+/// Output emitted by a tool during its execution.
+pub enum ToolOutput {
+    /// Intermediate progress (e.g. streaming stdout, reporting percentage).
+    Progress(String),
+    /// The final result of the tool execution.
+    Result(Value),
+}
 
 /// The core trait that all agent tools must implement.
 ///
 /// You should not implement this trait manually. Instead, annotate your `impl` block
-/// with the [`#[tool]`][agentix_macros::tool] macro and write plain `async fn` methods —
-/// the macro generates the `raw_tools` and `call` implementations for you.
-///
-/// # What the macro generates
-///
-/// For each `async fn` in the annotated `impl`:
-/// - A [`RawTool`] entry (name, description from doc comment, JSON Schema from parameter types)
-///   is added to the `raw_tools()` vec.
-/// - A `match` arm in `call()` that deserialises each argument from the incoming `args` JSON,
-///   invokes the method, and serialises the return value via `serde_json::to_value`.
-///
-/// Any return type that implements `serde::Serialize` is accepted — `serde_json::Value`,
-/// plain structs with `#[derive(Serialize)]`, primitives, `Option<T>`, `Vec<T>`, etc.
-///
-/// # Example
-///
-/// ```no_run
-/// use agentix::tool;
-///
-/// struct Calc;
-///
-/// #[tool]
-/// impl agentix::Tool for Calc {
-///     /// Add two integers together.
-///     /// a: first operand
-///     /// b: second operand
-///     async fn add(&self, a: i64, b: i64) -> i64 {
-///         a + b
-///     }
-/// }
-///
-/// # #[tokio::main] async fn main() {
-/// let agent = agentix::deepseek(std::env::var("DEEPSEEK_API_KEY").unwrap())
-///     .tool(Calc);
-/// # }
-/// ```
+/// with the [`#[tool]`][agentix_macros::tool] macro (for one-shot functions) or
+/// [`#[streaming_tool]`][agentix_macros::streaming_tool] (for streaming output).
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// Return the list of raw tool definitions to send to the API.
     fn raw_tools(&self) -> Vec<RawTool>;
 
-    /// Invoke the named tool with the given arguments and return the result as a JSON value.
-    ///
-    /// When using the `#[tool]` macro you do not implement this method yourself —
-    /// the macro generates it. The generated implementation accepts any return type
-    /// that implements `serde::Serialize` (including `serde_json::Value`, plain
-    /// structs with `#[derive(Serialize)]`, primitives, etc.) and converts the
-    /// value to `serde_json::Value` automatically.
-    async fn call(&self, name: &str, args: Value) -> Value;
+    /// Invoke the named tool with the given arguments and return a stream of outputs.
+    async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput>;
 }
 
 /// A collection of [`Tool`] implementations dispatched by name.
@@ -145,7 +114,9 @@ impl Tool for ToolBundle {
         self.tools.iter().flat_map(|t| t.raw_tools()).collect()
     }
 
-    async fn call(&self, name: &str, args: Value) -> Value {
+    async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput> {
+        use futures::StreamExt;
+        
         // Fast path: direct index lookup (covers tools registered at this level).
         if let Some(&idx) = self.index.get(name) {
             return self.tools[idx].call(name, args).await;
@@ -158,7 +129,8 @@ impl Tool for ToolBundle {
                 return tool.call(name, args).await;
             }
         }
-        json!({ "error": format!("unknown tool: {name}") })
+        let err = json!({ "error": format!("unknown tool: {name}") });
+        futures::stream::iter(vec![ToolOutput::Result(err)]).boxed()
     }
 }
 

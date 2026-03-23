@@ -64,13 +64,14 @@ pub use provider::{AnthropicProvider, DeepSeekProvider, GeminiProvider, OpenAIPr
 pub use request::{ImageContent, ImageData, Message, Request, ResponseFormat, ToolChoice, UserContent, ToolCall};
 pub use context::SharedContext;
 pub use node::{Node, TapNode, PromptNode};
-pub use tool_trait::{Tool, ToolBundle};
+pub use tool_trait::{Tool, ToolBundle, ToolOutput};
 
-pub use agentix_macros::tool;
+pub use agentix_macros::{tool, streaming_tool};
 pub use schemars;
 pub use serde;
 pub use serde_json;
 pub use async_trait;
+pub use futures;
 
 #[cfg(feature = "mcp")]
 pub use mcp::McpTool;

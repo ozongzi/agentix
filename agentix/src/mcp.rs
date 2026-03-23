@@ -356,7 +356,7 @@ impl Tool for McpTool {
         self.tools.clone()
     }
 
-    async fn call(&self, name: &str, args: Value) -> Value {
+    async fn call(&self, name: &str, args: Value) -> futures::stream::BoxStream<'static, crate::tool_trait::ToolOutput> {
         let arguments = args.as_object().cloned().map(|m| m.into_iter().collect());
         let owned_name: std::borrow::Cow<'static, str> = name.to_string().into();
 
@@ -366,59 +366,70 @@ impl Tool for McpTool {
         };
 
         let call_fut = self.peer.call_tool(params);
+        let timeout_opt = self.call_timeout;
+        let max_content_items = self.max_content_items;
+        let max_output_chars = self.max_output_chars;
+        let name_str = name.to_string();
 
-        let result = if let Some(timeout) = self.call_timeout {
-            match tokio::time::timeout(timeout, call_fut).await {
-                Ok(res) => res,
-                Err(_) => {
-                    error!(tool = %name, "MCP tool call timed out after {:?}", timeout);
-                    return serde_json::json!({ "error": format!("tool call timed out after {:?}", timeout) });
+        let result_stream = async_stream::stream! {
+            let result = if let Some(timeout) = timeout_opt {
+                match tokio::time::timeout(timeout, call_fut).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        error!(tool = %name_str, "MCP tool call timed out after {:?}", timeout);
+                        yield crate::tool_trait::ToolOutput::Result(serde_json::json!({ "error": format!("tool call timed out after {:?}", timeout) }));
+                        return;
+                    }
+                }
+            } else {
+                call_fut.await
+            };
+
+            match result {
+                Ok(result) => {
+                    let mut contents: Vec<Value> = result
+                        .content
+                        .into_iter()
+                        .filter_map(|item| serde_json::to_value(item).ok())
+                        .collect();
+
+                    if let Some(max_items) = max_content_items {
+                        if contents.len() > max_items {
+                            contents.truncate(max_items);
+                        }
+                    }
+
+                    let result_value = match contents.len() {
+                        0 => serde_json::json!({ "result": null }),
+                        1 => contents.into_iter().next().unwrap(),
+                        _ => serde_json::json!({ "content": contents }),
+                    };
+
+                    if let Some(max_chars) = max_output_chars {
+                        let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                        if json_string.len() > max_chars {
+                            let mut limit = max_chars.saturating_sub(40);
+                            limit = json_string.floor_char_boundary(limit);
+                            let truncated = &json_string[..limit];
+                            yield crate::tool_trait::ToolOutput::Result(serde_json::Value::String(format!(
+                                "{}...<truncated {} chars>",
+                                truncated,
+                                json_string.len()
+                            )));
+                            return;
+                        }
+                    }
+
+                    yield crate::tool_trait::ToolOutput::Result(result_value);
+                }
+                Err(e) => {
+                    error!(tool = %name_str, error = %e, "MCP tool call failed");
+                    yield crate::tool_trait::ToolOutput::Result(serde_json::json!({ "error": e.to_string() }));
                 }
             }
-        } else {
-            call_fut.await
         };
 
-        match result {
-            Ok(result) => {
-                let mut contents: Vec<Value> = result
-                    .content
-                    .into_iter()
-                    .filter_map(|item| serde_json::to_value(item).ok())
-                    .collect();
-
-                if let Some(max_items) = self.max_content_items {
-                    if contents.len() > max_items {
-                        contents.truncate(max_items);
-                    }
-                }
-
-                let result_value = match contents.len() {
-                    0 => serde_json::json!({ "result": null }),
-                    1 => contents.into_iter().next().unwrap(),
-                    _ => serde_json::json!({ "content": contents }),
-                };
-
-                if let Some(max_chars) = self.max_output_chars {
-                    let json_string = serde_json::to_string(&result_value).unwrap_or_default();
-                    if json_string.len() > max_chars {
-                        let mut limit = max_chars.saturating_sub(40);
-                        limit = json_string.floor_char_boundary(limit);
-                        let truncated = &json_string[..limit];
-                        return serde_json::Value::String(format!(
-                            "{}...<truncated {} chars>",
-                            truncated,
-                            json_string.len()
-                        ));
-                    }
-                }
-
-                result_value
-            }
-            Err(e) => {
-                error!(tool = %name, error = %e, "MCP tool call failed");
-                serde_json::json!({ "error": e.to_string() })
-            }
-        }
+        use futures::StreamExt;
+        result_stream.boxed()
     }
 }

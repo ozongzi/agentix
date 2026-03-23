@@ -204,14 +204,23 @@ impl Node for Agent {
                     }
 
                     // ── Execute Tools (Concurrent & Interruptible) ─────────────
-                    let mut tool_stream = futures::stream::iter(pending_tool_calls.into_iter().map(|tc| {
+                    let tool_streams: Vec<_> = pending_tool_calls.into_iter().map(|tc| {
                         let tools = Arc::clone(&agent.tools);
-                        async move {
-                            let parsed: serde_json::Value = serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
-                            let result = tools.read().await.call(&tc.name, parsed).await;
-                            (tc.id, tc.name, result)
-                        }
-                    })).buffer_unordered(10); // execute up to 10 tools concurrently
+                        let call_id = tc.id.clone();
+                        let name = tc.name.clone();
+                        let args = tc.arguments.clone();
+                        
+                        let stream = async_stream::stream! {
+                            let parsed: serde_json::Value = serde_json::from_str(&args).unwrap_or(serde_json::Value::Null);
+                            let mut tool_output_stream = tools.read().await.call(&name, parsed).await;
+                            while let Some(output) = tool_output_stream.next().await {
+                                yield (call_id.clone(), name.clone(), output);
+                            }
+                        };
+                        stream.boxed()
+                    }).collect();
+
+                    let mut tool_stream = futures::stream::select_all(tool_streams);
 
                     let mut aborted = false;
                     
@@ -241,7 +250,11 @@ impl Node for Agent {
 
                             maybe_res = tool_stream.next() => {
                                 match maybe_res {
-                                    Some((call_id, name, result)) => {
+                                    Some((call_id, name, crate::tool_trait::ToolOutput::Progress(progress))) => {
+                                        let ev = AgentEvent::ToolProgress { call_id, name, progress };
+                                        yield ev; // Progress is not recorded in memory
+                                    }
+                                    Some((call_id, name, crate::tool_trait::ToolOutput::Result(result))) => {
                                         let ev = AgentEvent::ToolResult { call_id, name, result };
                                         agent.memory.lock().await.record_event(&ev).await;
                                         yield ev;
@@ -256,7 +269,13 @@ impl Node for Agent {
                         break 'turn;
                     }
                     
-                    // Loop back to start the next LLM round with tool results
+                    // Inject any pending inputs (e.g. user messages received while tools were running)
+                    // so they are included in the very next LLM request.
+                    while let Some(input_item) = pending_inputs.pop_front() {
+                        agent.memory.lock().await.record_input(&input_item).await;
+                    }
+                    
+                    // Loop back to start the next LLM round with tool results and new inputs
                 }
             }
         }.boxed()
