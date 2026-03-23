@@ -11,6 +11,7 @@ use crate::memory::{InMemory, Memory};
 use crate::msg::Msg;
 use crate::request::UserContent;
 use crate::tool_trait::{Tool, ToolBundle};
+use crate::types::UsageStats;
 
 // ── AgentInput ────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,8 @@ struct AgentInner {
     /// Always accessible — config changes work before and after first send().
     client: LlmClient,
     state:  Mutex<RuntimeState>,
+    /// Accumulated token usage for the entire life of this agent.
+    usage:  Arc<Mutex<UsageStats>>,
     /// Lazily-created Sender<Msg> bridge for Node::input() compatibility.
     msg_inlet: std::sync::OnceLock<mpsc::Sender<Msg>>,
 }
@@ -80,6 +83,7 @@ impl Agent {
         Self(Arc::new(AgentInner {
             client,
             state: Mutex::new(RuntimeState::Pending { tools, memory, bus }),
+            usage: Arc::new(Mutex::new(UsageStats::default())),
             msg_inlet: std::sync::OnceLock::new(),
         }))
     }
@@ -166,7 +170,7 @@ impl Agent {
         drop(s);
 
         tokio::spawn(agent_loop(
-            self.0.client.clone(), tools, memory, inbox_rx, bus.clone(),
+            self.0.client.clone(), tools, memory, inbox_rx, bus.clone(), self.0.usage.clone(),
         ));
 
         (inbox_tx, bus)
@@ -229,6 +233,11 @@ impl Agent {
     pub fn config_snapshot(&self) -> crate::config::AgentConfig {
         self.0.client.snapshot()
     }
+
+    /// Return the accumulated token usage for this agent.
+    pub fn usage(&self) -> UsageStats {
+        self.0.usage.lock().unwrap().clone()
+    }
 }
 
 // ── agent_loop ────────────────────────────────────────────────────────────────
@@ -239,6 +248,7 @@ async fn agent_loop(
     mut memory: Box<dyn Memory + Send>,
     mut inbox:  mpsc::Receiver<AgentInput>,
     bus:        EventBus,
+    usage:      Arc<Mutex<UsageStats>>,
 ) {
     // Wrap tools in Arc so concurrent tool-call futures can share it.
     let tools = Arc::new(tools);
@@ -319,6 +329,10 @@ async fn agent_loop(
                                     ));
                                 }
                                 bus.send(msg);
+                            }
+                            Some(Msg::Usage(stats)) => {
+                                *usage.lock().unwrap() += stats.clone();
+                                bus.send(Msg::Usage(stats));
                             }
                             Some(other) => {
                                 memory.record(&other).await;

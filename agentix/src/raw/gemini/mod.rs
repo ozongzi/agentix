@@ -272,7 +272,7 @@ impl From<crate::request::Request> for Request {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Response {
-    pub candidates: Vec<Candidate>,
+    pub candidates: Option<Vec<Candidate>>,
     pub usage_metadata: Option<UsageMetadata>,
 }
 
@@ -307,6 +307,17 @@ pub struct ResponseFunctionCall {
 pub struct UsageMetadata {
     pub prompt_token_count: u32,
     pub candidates_token_count: u32,
+    pub total_token_count: u32,
+}
+
+impl From<UsageMetadata> for crate::types::UsageStats {
+    fn from(u: UsageMetadata) -> Self {
+        Self {
+            prompt_tokens: u.prompt_token_count as usize,
+            completion_tokens: u.candidates_token_count as usize,
+            total_tokens: u.total_token_count as usize,
+        }
+    }
 }
 
 // ── Streaming ─────────────────────────────────────────────────────────────────
@@ -333,11 +344,20 @@ impl ProviderProtocol for Gemini {
     }
 
     fn parse_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
-        let candidate = match raw.candidates.into_iter().next() {
-            Some(c) => c,
-            None => return (vec![], vec![]),
-        };
         let mut events = Vec::new();
+        if let Some(u) = raw.usage_metadata {
+            events.push(AgentEvent::Usage(u.into()));
+        }
+
+        let candidates = match raw.candidates {
+            Some(c) => c,
+            None => return (events, vec![]),
+        };
+        let candidate = match candidates.into_iter().next() {
+            Some(c) => c,
+            None => return (events, vec![]),
+        };
+
         let mut tool_calls = Vec::new();
         for part in candidate.content.parts {
             if let Some(t) = part.text.filter(|s| !s.is_empty()) {
@@ -355,11 +375,20 @@ impl ProviderProtocol for Gemini {
     }
 
     fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
-        let candidate = match chunk.candidates.into_iter().next() {
-            Some(c) => c,
-            None => return vec![],
-        };
         let mut events = Vec::new();
+        if let Some(u) = chunk.usage_metadata {
+            events.push(AgentEvent::Usage(u.into()));
+        }
+
+        let candidates = match chunk.candidates {
+            Some(c) => c,
+            None => return events,
+        };
+        let candidate = match candidates.into_iter().next() {
+            Some(c) => c,
+            None => return events,
+        };
+
         for part in candidate.content.parts {
             if let Some(t) = part.text.filter(|s| !s.is_empty()) {
                 bufs.content_buf.push_str(&t);

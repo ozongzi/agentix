@@ -5,26 +5,29 @@
 //! `Into<ProviderRequest>`) in its own module so that the agent core never
 //! needs to know about provider-specific field names or structural quirks.
 
+use serde::{Deserialize, Serialize};
 use crate::raw::shared::ToolDefinition;
 
 // ─── Message ────────────────────────────────────────────────────────────────
 
 /// Image content that can be embedded in a user message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageContent {
     pub data: ImageData,
     /// MIME type, e.g. `"image/jpeg"`, `"image/png"`.
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImageData {
     Base64(String),
     Url(String),
 }
 
 /// A single content block inside a `Message::User`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserContent {
     Text(String),
     Image(ImageContent),
@@ -61,8 +64,45 @@ pub enum Message {
     ToolResult { call_id: String, content: String },
 }
 
+impl Message {
+    /// Estimate the number of tokens in this message using tiktoken.
+    ///
+    /// Note: This is an estimation. Different providers have slightly different
+    /// tokenization rules and overheads for message metadata (role, name, etc.).
+    pub fn estimate_tokens(&self) -> usize {
+        let bpe = tiktoken_rs::cl100k_base().unwrap();
+        let mut tokens = 0;
+
+        match self {
+            Message::User(parts) => {
+                tokens += 4; // overhead for role
+                for part in parts {
+                    match part {
+                        UserContent::Text(t) => tokens += bpe.encode_with_special_tokens(t).len(),
+                        UserContent::Image(_) => tokens += 1000, // rough fixed cost for images
+                    }
+                }
+            }
+            Message::Assistant { content, reasoning, tool_calls } => {
+                tokens += 4;
+                if let Some(c) = content { tokens += bpe.encode_with_special_tokens(c).len(); }
+                if let Some(r) = reasoning { tokens += bpe.encode_with_special_tokens(r).len(); }
+                for tc in tool_calls {
+                    tokens += bpe.encode_with_special_tokens(&tc.name).len();
+                    tokens += bpe.encode_with_special_tokens(&tc.arguments).len();
+                }
+            }
+            Message::ToolResult { content, .. } => {
+                tokens += 4;
+                tokens += bpe.encode_with_special_tokens(content).len();
+            }
+        }
+        tokens
+    }
+}
+
 /// A single tool invocation requested by the model.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -73,7 +113,8 @@ pub struct ToolCall {
 // ─── ToolChoice ─────────────────────────────────────────────────────────────
 
 /// Provider-agnostic tool selection hint.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolChoice {
     /// Let the model decide (default when tools are present).
     #[default]
@@ -129,9 +170,11 @@ pub struct Request {
 }
 
 /// Provider-agnostic output-format hint.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResponseFormat {
     #[default]
     Text,
+    #[serde(rename = "json_object")]
     JsonObject,
 }

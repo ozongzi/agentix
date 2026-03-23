@@ -1,21 +1,15 @@
-//! OpenAI-compatible chat completions wire format.
-
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
-
-use crate::raw::shared::{ResponseFormat, ToolChoice, ToolDefinition};
-use crate::request::{ImageData, Message, UserContent};
 
 // ── Request ──────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, Serialize)]
 pub struct Request {
     pub model: String,
-    pub messages: Vec<RequestMessage>,
+    pub messages: Vec<Message>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<ToolDefinition>>,
+    pub tools: Option<Vec<crate::raw::shared::ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_choice: Option<ToolChoice>,
+    pub tool_choice: Option<crate::request::ToolChoice>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -23,14 +17,15 @@ pub struct Request {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_format: Option<ResponseFormat>,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub extra_body: Option<Map<String, Value>>,
+    pub response_format: Option<crate::request::ResponseFormat>,
+    #[serde(flatten)]
+    pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "role", rename_all = "lowercase")]
-pub enum RequestMessage {
+#[serde(tag = "role")]
+#[serde(rename_all = "lowercase")]
+pub enum Message {
     System {
         content: String,
     },
@@ -42,16 +37,15 @@ pub enum RequestMessage {
         content: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         reasoning_content: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        tool_calls: Option<Vec<ToolCall>>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        tool_calls: Vec<ResponseToolCall>,
     },
     Tool {
-        content: String,
         tool_call_id: String,
+        content: String,
     },
 }
 
-/// User message content — either a plain string or a multimodal array.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
 pub enum UserMessageContent {
@@ -60,7 +54,8 @@ pub enum UserMessageContent {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
 pub enum ContentPart {
     Text { text: String },
     ImageUrl { image_url: ImageUrl },
@@ -73,93 +68,64 @@ pub struct ImageUrl {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ToolCall {
-    pub id: String,
-    pub r#type: &'static str,
-    pub function: FunctionCall,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FunctionCall {
-    pub name: String,
-    pub arguments: String,
-}
-
-// ResponseFormat is imported from crate::raw::shared
-
-// ── From<AgentRequest> ───────────────────────────────────────────────────────
-
 impl From<crate::request::Request> for Request {
     fn from(req: crate::request::Request) -> Self {
-        let mut messages: Vec<RequestMessage> = Vec::new();
-
-        if let Some(sys) = req.system_message
-            && !sys.is_empty()
-        {
-            messages.push(RequestMessage::System { content: sys });
+        let mut messages = Vec::new();
+        if let Some(s) = req.system_message {
+            messages.push(Message::System { content: s });
         }
-
-        for msg in req.messages {
-            match msg {
-                Message::User(parts) => {
-                    let content = user_content_from_parts(parts);
-                    messages.push(RequestMessage::User { content });
+        for m in req.messages {
+            match m {
+                crate::request::Message::User(parts) => {
+                    messages.push(Message::User {
+                        content: user_content_from_parts(parts),
+                    });
                 }
-                Message::Assistant {
+                crate::request::Message::Assistant {
                     content,
                     reasoning,
                     tool_calls,
                 } => {
-                    messages.push(RequestMessage::Assistant {
+                    messages.push(Message::Assistant {
                         content,
                         reasoning_content: reasoning,
-                        tool_calls: if tool_calls.is_empty() {
-                            None
-                        } else {
-                            Some(
-                                tool_calls
-                                    .into_iter()
-                                    .map(|tc| ToolCall {
-                                        id: tc.id,
-                                        r#type: "function",
-                                        function: FunctionCall {
-                                            name: tc.name,
-                                            arguments: tc.arguments,
-                                        },
-                                    })
-                                    .collect(),
-                            )
-                        },
+                        tool_calls: tool_calls
+                            .into_iter()
+                            .map(|tc| ResponseToolCall {
+                                id: tc.id,
+                                function: ResponseFunctionCall {
+                                    name: tc.name,
+                                    arguments: tc.arguments,
+                                },
+                            })
+                            .collect(),
                     });
                 }
-                Message::ToolResult { call_id, content } => {
-                    messages.push(RequestMessage::Tool {
-                        content,
+                crate::request::Message::ToolResult { call_id, content } => {
+                    messages.push(Message::Tool {
                         tool_call_id: call_id,
+                        content,
                     });
                 }
             }
         }
 
-        let tool_choice = req.tool_choice.map(Into::into);
-        let response_format = req.response_format.map(Into::into);
-
         Request {
             model: req.model,
             messages,
             tools: req.tools,
-            tool_choice,
+            tool_choice: req.tool_choice,
             stream: Some(req.stream),
             temperature: req.temperature,
             max_tokens: req.max_tokens,
-            response_format,
+            response_format: req.response_format,
             extra_body: req.extra_body,
         }
     }
 }
 
-fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {
+fn user_content_from_parts(parts: Vec<crate::request::UserContent>) -> UserMessageContent {
+    use crate::request::{ImageData, UserContent};
     if parts.len() == 1
         && matches!(&parts[0], UserContent::Text(_))
         && !matches!(&parts[0], UserContent::Image(_))
@@ -214,13 +180,13 @@ pub struct ResponseMessage {
     pub tool_calls: Option<Vec<ResponseToolCall>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ResponseToolCall {
     pub id: String,
     pub function: ResponseFunctionCall,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ResponseFunctionCall {
     pub name: String,
     pub arguments: String,
@@ -233,11 +199,23 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
+impl From<Usage> for crate::types::UsageStats {
+    fn from(u: Usage) -> Self {
+        Self {
+            prompt_tokens: u.prompt_tokens as usize,
+            completion_tokens: u.completion_tokens as usize,
+            total_tokens: u.total_tokens as usize,
+        }
+    }
+}
+
 // ── Streaming chunk ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 pub struct StreamChunk {
     pub choices: Vec<ChunkChoice>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,12 +258,16 @@ use crate::request::ToolCall as AgentToolCall;
 use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 
 fn parse_openai_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
+    let mut events = Vec::new();
+    if let Some(u) = raw.usage {
+        events.push(AgentEvent::Usage(u.into()));
+    }
+
     let choice = match raw.choices.into_iter().next() {
         Some(c) => c,
-        None => return (vec![], vec![]),
+        None => return (events, vec![]),
     };
     let msg = choice.message;
-    let mut events = Vec::new();
     if let Some(r) = msg.reasoning_content.filter(|s| !s.is_empty()) {
         events.push(AgentEvent::ReasoningToken(r));
     }
@@ -306,13 +288,18 @@ fn parse_openai_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>)
 }
 
 fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
+    let mut events = Vec::new();
+
+    if let Some(u) = chunk.usage {
+        events.push(AgentEvent::Usage(u.into()));
+    }
+
     let choice = match chunk.choices.into_iter().next() {
         Some(c) => c,
-        None => return vec![],
+        None => return events,
     };
     let delta = choice.delta;
     if let Some(dtcs) = delta.tool_calls {
-        let mut events = Vec::new();
         for dtc in dtcs {
             let idx = dtc.index as usize;
             if bufs.tool_call_bufs.len() <= idx {
@@ -357,17 +344,16 @@ fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEve
                 }
             }
         }
-        return events;
     }
     if let Some(r) = delta.reasoning_content.filter(|s| !s.is_empty()) {
         bufs.reasoning_buf.push_str(&r);
-        return vec![AgentEvent::ReasoningToken(r)];
+        events.push(AgentEvent::ReasoningToken(r));
     }
     if let Some(t) = delta.content.filter(|s| !s.is_empty()) {
         bufs.content_buf.push_str(&t);
-        return vec![AgentEvent::Token(t)];
+        events.push(AgentEvent::Token(t));
     }
-    vec![]
+    events
 }
 
 fn finalize_openai_stream(bufs: &mut StreamBufs) -> Vec<AgentToolCall> {

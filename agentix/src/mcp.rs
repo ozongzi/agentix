@@ -53,6 +53,7 @@ use rmcp::{
 };
 use serde_json::Value;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::process::Command;
 use tracing::{error, instrument};
 
@@ -142,12 +143,16 @@ pub struct McpTool {
     /// Maximum number of content items in the output.
     /// Default: 50 items
     max_content_items: Option<usize>,
+    /// Timeout for each tool call. Default: 30 seconds.
+    call_timeout: Option<Duration>,
 }
 
 /// Default output character limit (8000 chars ≈ 2000 tokens)
 const DEFAULT_MAX_OUTPUT_CHARS: usize = 8_000;
 /// Default maximum content items
 const DEFAULT_MAX_CONTENT_ITEMS: usize = 50;
+/// Default call timeout
+const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 impl McpTool {
     // ── Constructors ──────────────────────────────────────────────────────────
@@ -246,6 +251,7 @@ impl McpTool {
             _service: Arc::new(running),
             max_output_chars: Some(DEFAULT_MAX_OUTPUT_CHARS),
             max_content_items: Some(DEFAULT_MAX_CONTENT_ITEMS),
+            call_timeout: Some(DEFAULT_CALL_TIMEOUT),
         })
     }
 
@@ -337,6 +343,18 @@ impl McpTool {
         self
     }
 
+    /// Set the timeout for tool calls.
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.call_timeout = Some(timeout);
+        self
+    }
+
+    /// Disable timeout for tool calls (use with caution!).
+    pub fn without_timeout(mut self) -> Self {
+        self.call_timeout = None;
+        self
+    }
+
     /// Get the current output limits (useful for debugging).
     pub fn output_limits(&self) -> (Option<usize>, Option<usize>) {
         (self.max_output_chars, self.max_content_items)
@@ -400,7 +418,21 @@ impl Tool for McpTool {
             None => CallToolRequestParams::new(owned_name),
         };
 
-        match self.peer.call_tool(params).await {
+        let call_fut = self.peer.call_tool(params);
+
+        let result = if let Some(timeout) = self.call_timeout {
+            match tokio::time::timeout(timeout, call_fut).await {
+                Ok(res) => res,
+                Err(_) => {
+                    error!(tool = %name, "MCP tool call timed out after {:?}", timeout);
+                    return serde_json::json!({ "error": format!("tool call timed out after {:?}", timeout) });
+                }
+            }
+        } else {
+            call_fut.await
+        };
+
+        match result {
             Ok(result) => {
                 // MCP returns a list of content items; flatten them into a
                 // single JSON value that the model can read.

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use crate::request::UserContent;
+use crate::types::UsageStats;
 
 /// Trait for custom message types that can be sent through the event bus.
 pub trait CustomMsg: std::fmt::Debug + Send + Sync + 'static {
@@ -25,6 +26,7 @@ pub trait CustomMsg: std::fmt::Debug + Send + Sync + 'static {
 ///   Reasoning*    (zero or more; one in assembled view)
 ///   ToolCall*     (zero or more, always fully assembled)
 ///   ToolResult*   (one per ToolCall, after execution)
+///   Usage         (sent after Done, once per LLM call)
 /// Done
 /// ```
 #[non_exhaustive]
@@ -50,6 +52,8 @@ pub enum Msg {
     ToolCall { id: String, name: String, args: String },
     /// The result of a completed tool invocation.
     ToolResult { call_id: String, name: String, result: Value },
+    /// Token usage statistics for the LLM call that just completed.
+    Usage(UsageStats),
 
     // ── Error / extension ────────────────────────────────────────────────────
     /// An error occurred during the current turn.

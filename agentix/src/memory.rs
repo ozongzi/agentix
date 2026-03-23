@@ -1,7 +1,10 @@
 use async_trait::async_trait;
+use futures::StreamExt;
+use tracing::{debug, warn};
 
 use crate::msg::Msg;
-use crate::request::Message;
+use crate::request::{Message, Request};
+use crate::client::LlmClient;
 
 /// A component that records bus events and provides conversation context.
 ///
@@ -12,6 +15,8 @@ use crate::request::Message;
 /// # Built-in implementations
 /// - [`InMemory`] — keeps all messages in a `Vec` (default)
 /// - [`SlidingWindow`] — keeps the last N messages
+/// - [`TokenSlidingWindow`] — keeps messages up to a Token limit
+/// - [`LlmSummarizer`] — summarises old messages using an LLM
 #[async_trait]
 pub trait Memory: Send {
     /// Called for every message emitted on the bus during a turn.
@@ -56,6 +61,16 @@ impl InMemory {
         self.messages = history;
         self
     }
+
+    /// Access raw messages.
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// Set messages directly (used by summarizers).
+    pub fn set_messages(&mut self, messages: Vec<Message>) {
+        self.messages = messages;
+    }
 }
 
 #[async_trait]
@@ -86,11 +101,14 @@ impl Memory for InMemory {
             }
             Msg::Done => {
                 // Commit accumulated assistant turn to history.
-                let tool_calls: Vec<crate::request::ToolCall> = self
+                let mut tool_calls: Vec<crate::request::ToolCall> = self
                     .tool_call_bufs
                     .drain()
                     .map(|(id, (name, arguments))| crate::request::ToolCall { id, name, arguments })
                     .collect();
+                
+                // Sort by ID to ensure deterministic order if multiple tools were called.
+                tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
 
                 let content = if self.assistant_buf.is_empty() { None } else { Some(self.assistant_buf.clone()) };
                 let reasoning = if self.reasoning_buf.is_empty() { None } else { Some(self.reasoning_buf.clone()) };
@@ -143,5 +161,146 @@ impl Memory for SlidingWindow {
         } else {
             all[len - self.max..].to_vec()
         }
+    }
+}
+
+// ── TokenSlidingWindow ────────────────────────────────────────────────────────
+
+/// Keeps messages up to a maximum Token limit, discarding oldest messages first.
+pub struct TokenSlidingWindow {
+    inner: InMemory,
+    max_tokens: usize,
+}
+
+impl TokenSlidingWindow {
+    pub fn new(max_tokens: usize) -> Self {
+        Self { inner: InMemory::new(), max_tokens }
+    }
+}
+
+#[async_trait]
+impl Memory for TokenSlidingWindow {
+    async fn record(&mut self, msg: &Msg) {
+        self.inner.record(msg).await;
+    }
+
+    async fn context(&self) -> Vec<Message> {
+        let all = self.inner.context().await;
+        let mut total = 0;
+        let mut result = Vec::new();
+
+        // Iterate backwards to keep the most recent messages
+        for msg in all.into_iter().rev() {
+            let tokens = msg.estimate_tokens();
+            if total + tokens > self.max_tokens && !result.is_empty() {
+                break;
+            }
+            total += tokens;
+            result.push(msg);
+        }
+        result.reverse();
+        result
+    }
+}
+
+// ── LlmSummarizer ─────────────────────────────────────────────────────────────
+
+/// Summarises older conversation history using an LLM when a Token limit is reached.
+pub struct LlmSummarizer {
+    inner: InMemory,
+    client: LlmClient,
+    /// Threshold to trigger summarization.
+    trigger_at_tokens: usize,
+    /// Keep at least this many recent messages untouched.
+    keep_recent: usize,
+}
+
+impl LlmSummarizer {
+    pub fn new(client: LlmClient, trigger_at_tokens: usize) -> Self {
+        Self {
+            inner: InMemory::new(),
+            client,
+            trigger_at_tokens,
+            keep_recent: 4,
+        }
+    }
+
+    pub fn with_keep_recent(mut self, n: usize) -> Self {
+        self.keep_recent = n;
+        self
+    }
+
+    async fn summarize_if_needed(&mut self) {
+        let messages = self.inner.messages();
+        if messages.len() <= self.keep_recent {
+            return;
+        }
+
+        let total_tokens: usize = messages.iter().map(|m| m.estimate_tokens()).sum();
+        if total_tokens < self.trigger_at_tokens {
+            return;
+        }
+
+        debug!(total_tokens, threshold = self.trigger_at_tokens, "triggering LLM summarization");
+
+        let to_summarize = &messages[..messages.len() - self.keep_recent];
+        let recent = &messages[messages.len() - self.keep_recent..];
+
+        let mut summary_req = Request::default();
+        summary_req.system_message = Some("You are a helpful assistant. Summarize the following conversation history concisely while preserving key facts and state.".to_string());
+        summary_req.messages = to_summarize.to_vec();
+        summary_req.max_tokens = Some(512);
+
+        // We use a simplified non-streaming call for summarization
+        // Since Agent handles the complexity, we'll try to get a simple response.
+        let mut stream = match self.client.stream(&summary_req.messages, &[]).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(error = %e, "summarization failed to start");
+                return;
+            }
+        };
+
+        let mut summary_text = String::new();
+        while let Some(msg) = stream.next().await {
+            match msg {
+                Msg::Token(t) => summary_text.push_str(&t),
+                Msg::Error(e) => {
+                    warn!(error = %e, "summarization stream error");
+                    return;
+                }
+                Msg::Done => break,
+                _ => {}
+            }
+        }
+
+        if summary_text.is_empty() {
+            warn!("summarization returned empty text");
+            return;
+        }
+
+        let mut new_history = Vec::new();
+        new_history.push(Message::Assistant {
+            content: Some(format!("[auto-summary] {}", summary_text)),
+            reasoning: None,
+            tool_calls: vec![],
+        });
+        new_history.extend_from_slice(recent);
+
+        self.inner.set_messages(new_history);
+    }
+}
+
+#[async_trait]
+impl Memory for LlmSummarizer {
+    async fn record(&mut self, msg: &Msg) {
+        self.inner.record(msg).await;
+        if matches!(msg, Msg::Done) {
+            self.summarize_if_needed().await;
+        }
+    }
+
+    async fn context(&self) -> Vec<Message> {
+        self.inner.context().await
     }
 }

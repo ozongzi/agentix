@@ -13,6 +13,11 @@ pub struct AgentConfig {
     pub max_tokens:    Option<u32>,
     pub temperature:   Option<f32>,
     pub extra_body:    Map<String, Value>,
+
+    /// Maximum number of retries for transient errors. Default: 3.
+    pub max_retries:   u32,
+    /// Initial delay between retries in milliseconds. Default: 1000ms.
+    pub retry_delay_ms: u64,
 }
 
 impl Default for AgentConfig {
@@ -24,6 +29,8 @@ impl Default for AgentConfig {
             max_tokens:    None,
             temperature:   None,
             extra_body:    Map::new(),
+            max_retries:   3,
+            retry_delay_ms: 1000,
         }
     }
 }

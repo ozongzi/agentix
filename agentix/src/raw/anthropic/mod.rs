@@ -242,6 +242,16 @@ pub struct Usage {
     pub output_tokens: u32,
 }
 
+impl From<Usage> for crate::types::UsageStats {
+    fn from(u: Usage) -> Self {
+        Self {
+            prompt_tokens: u.input_tokens as usize,
+            completion_tokens: u.output_tokens as usize,
+            total_tokens: (u.input_tokens + u.output_tokens) as usize,
+        }
+    }
+}
+
 // ── Streaming events ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -263,6 +273,7 @@ pub enum StreamEvent {
     },
     MessageDelta {
         delta: MessageDelta,
+        usage: Option<Usage>,
     },
     MessageStop,
     Error {
@@ -324,6 +335,9 @@ impl ProviderProtocol for Anthropic {
 
     fn parse_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
         let mut events = Vec::new();
+        if let Some(u) = raw.usage {
+            events.push(AgentEvent::Usage(u.into()));
+        }
         let mut tool_calls = Vec::new();
         for block in raw.content {
             match block {
@@ -348,6 +362,18 @@ impl ProviderProtocol for Anthropic {
 
     fn parse_chunk(chunk: StreamEvent, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
         match chunk {
+            StreamEvent::MessageStart { message } => {
+                if let Some(u) = message.usage {
+                    return vec![AgentEvent::Usage(u.into())];
+                }
+                vec![]
+            }
+            StreamEvent::MessageDelta { usage, .. } => {
+                if let Some(u) = usage {
+                    return vec![AgentEvent::Usage(u.into())];
+                }
+                vec![]
+            }
             StreamEvent::ContentBlockStart {
                 index,
                 content_block,

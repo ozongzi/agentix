@@ -139,15 +139,19 @@ impl agentix::Tool for Calculator {
     /// Add two numbers.
     /// a: first number
     /// b: second number
-    async fn add(&self, a: f64, b: f64) -> Value {
-        json!({ "result": a + b })
+    async fn add(&self, a: i64, b: i64) -> i64 {
+        a + b
     }
 
     /// Multiply two numbers.
     /// a: first number
     /// b: second number
-    async fn multiply(&self, a: f64, b: f64) -> Value {
-        json!({ "result": a * b })
+    async fn multiply(&self, a: i64, b: i64) -> Result<i64, String> {
+        if a == 0 || b == 0 {
+            Err("Multiplication by zero is boring".to_string())
+        } else {
+            Ok(a * b)
+        }
     }
 }
 

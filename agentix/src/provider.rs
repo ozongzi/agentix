@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
-use tracing::warn;
+use tracing::{warn, debug};
 
 use crate::config::AgentConfig;
 use crate::error::ApiError;
@@ -23,6 +23,7 @@ use crate::types::{ProviderProtocol, StreamBufs, AgentEvent};
 /// - Yield [`Msg::Token`] / [`Msg::Reasoning`] immediately as they arrive.
 /// - Yield zero or more **complete** [`Msg::ToolCall`] (fully assembled args)
 ///   after all tokens.
+/// - Yield [`Msg::Usage`] once per turn (if supported).
 /// - Yield [`Msg::Done`] as the final item.
 ///
 /// # Custom providers
@@ -68,11 +69,11 @@ pub(crate) async fn post_streaming<T: serde::Serialize>(
     }
     builder = builder.json(body);
 
-    let resp = builder.send().await.map_err(ApiError::Reqwest)?;
+    let resp = builder.send().await.map_err(ApiError::Network)?;
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_else(|e| e.to_string());
-        return Err(ApiError::http_error(status, body));
+        return Err(ApiError::http(status, body));
     }
     Ok(resp)
 }
@@ -120,12 +121,27 @@ impl<P: ProviderProtocol> Provider for ProtocolProvider<P> {
         );
         let raw = P::build_raw(req);
 
-        let resp = post_streaming(
-            http, &url, &raw, &self.token,
-            P::uses_query_key_auth(),
-            P::auth_header_name(),
-            P::extra_headers(),
-        ).await?;
+        // Exponential backoff retry logic
+        let mut attempts = 0;
+        let mut delay = config.retry_delay_ms;
+
+        let resp = loop {
+            match post_streaming(
+                http, &url, &raw, &self.token,
+                P::uses_query_key_auth(),
+                P::auth_header_name(),
+                P::extra_headers(),
+            ).await {
+                Ok(r) => break r,
+                Err(e) if e.is_retriable() && attempts < config.max_retries => {
+                    attempts += 1;
+                    warn!(error = %e, attempt = attempts, "transient error, retrying in {}ms", delay);
+                    tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    delay *= 2; // exponential backoff
+                }
+                Err(e) => return Err(e),
+            }
+        };
 
         // Stream tokens immediately; accumulate tool-call chunks; emit complete
         // ToolCalls + TurnDone once the SSE stream closes.
@@ -143,11 +159,16 @@ impl<P: ProviderProtocol> Provider for ProtocolProvider<P> {
                                     match ae {
                                         AgentEvent::Token(t)          => yield Msg::Token(t),
                                         AgentEvent::ReasoningToken(t) => yield Msg::Reasoning(t),
+                                        AgentEvent::Usage(stats)      => yield Msg::Usage(stats),
                                         _ => {} // partial tool-call chunks accumulate in bufs
                                     }
                                 }
                             }
-                            Err(e) => warn!(data = %ev.data, error = %e, "chunk parse failed"),
+                            Err(e) => {
+                                // Sometimes providers send non-JSON "keep-alive" comments or similar.
+                                // We debug log them but don't crash.
+                                debug!(data = %ev.data, error = %e, "chunk parse failed (ignoring)");
+                            }
                         }
                     }
                     Err(e) => warn!(error = %e, "eventsource error"),
