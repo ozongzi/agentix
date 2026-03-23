@@ -53,7 +53,7 @@ async fn main() {
         .into_handle();
 
     prompt.input()
-        .send(Msg::User("Great product, fast shipping!".into()))
+        .send(Msg::User(vec!["Great product, fast shipping!".into()]))
         .await
         .unwrap();
 }
@@ -116,7 +116,7 @@ pub use error::ApiError;
 pub use memory::{InMemory, Memory, SlidingWindow};
 pub use msg::{CustomMsg, Msg};
 pub use provider::{AnthropicProvider, DeepSeekProvider, GeminiProvider, OpenAIProvider, Provider};
-pub use request::{Message, Request, ResponseFormat, ToolChoice};
+pub use request::{ImageContent, ImageData, Message, Request, ResponseFormat, ToolChoice, UserContent};
 pub use context::SharedContext;
 pub use node::{Graph, GraphHandle, MiddlewareFn, Node, OutputParser, PromptTemplate};
 pub use tool_trait::{Tool, ToolBundle};

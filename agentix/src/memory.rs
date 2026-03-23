@@ -62,10 +62,8 @@ impl InMemory {
 impl Memory for InMemory {
     async fn record(&mut self, msg: &Msg) {
         match msg {
-            Msg::User(text) => {
-                self.messages.push(Message::User(vec![
-                    crate::request::UserContent::Text(text.clone()),
-                ]));
+            Msg::User(parts) => {
+                self.messages.push(Message::User(parts.clone()));
             }
             Msg::Token(t) => {
                 self.assistant_buf.push_str(t);

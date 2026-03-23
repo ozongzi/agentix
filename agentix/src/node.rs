@@ -8,6 +8,7 @@ use tokio::task::AbortHandle;
 use crate::bus::EventBus;
 use crate::context::SharedContext;
 use crate::msg::Msg;
+use crate::request::UserContent;
 
 // ── Node trait ────────────────────────────────────────────────────────────────
 
@@ -130,7 +131,7 @@ impl Graph {
     /// For a custom transform use [`edge_map`][Graph::edge_map].
     pub fn edge(self, from: &impl Node, to: &impl Node) -> Self {
         self.edge_map(from, to, |msg| match msg {
-            Msg::Token(text) => Some(Msg::User(text)), // LLM output → next agent input
+            Msg::Token(text) => Some(Msg::User(vec![UserContent::Text(text)])), // LLM output → next agent input
             Msg::User(_)     => Some(msg),             // PromptTemplate / OutputParser output
             Msg::Custom(_)   => Some(msg),             // typed payloads pass through
             _                => None,
@@ -156,7 +157,7 @@ impl Graph {
     /// let _h = Graph::new().edge_map(&extractor, &writer, |msg| {
     ///     match msg {
     ///         Msg::Custom(_)   => Some(msg),          // pass typed payload
-    ///         Msg::Token(t)    => Some(Msg::User(t)), // fallback for plain text
+    ///         Msg::Token(t)    => Some(Msg::User(vec![t.into()])), // fallback for plain text
     ///         _                => None,
     ///     }
     /// }).into_handle();
@@ -194,6 +195,7 @@ impl Graph {
     ///
     /// The handle **must be kept alive** for as long as the graph should run.
     /// Dropping it aborts all edge tasks.
+    #[must_use]
     pub fn into_handle(self) -> GraphHandle {
         GraphHandle(self.handles)
     }
@@ -223,7 +225,7 @@ impl Graph {
 /// let agent  = agentix::deepseek(std::env::var("KEY").unwrap());
 ///
 /// let _h = Graph::new().edge(&prompt, &agent).into_handle();
-/// prompt.input().send(agentix::Msg::User("Hello world".into())).await.unwrap();
+/// prompt.input().send(agentix::Msg::User(vec!["Hello world".into()])).await.unwrap();
 ///
 /// // Hot-swap the language without rebuilding the graph:
 /// ctx.set("lang", "Japanese");
@@ -246,7 +248,10 @@ fn spawn_template_task(
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             let out = match msg {
-                Msg::User(text) => {
+                Msg::User(parts) => {
+                    let text: String = parts.iter()
+                        .filter_map(|p| if let UserContent::Text(t) = p { Some(t.as_str()) } else { None })
+                        .collect::<Vec<_>>().join("\n");
                     let mut s = tmpl.replace("{input}", &text);
                     {
                         let v = vars.read().unwrap();
@@ -264,7 +269,7 @@ fn spawn_template_task(
                             }
                         }
                     }
-                    Msg::User(s)
+                    Msg::User(vec![UserContent::Text(s)])
                 }
                 other => other,
             };
@@ -352,7 +357,12 @@ impl OutputParser {
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let out = match msg {
-                    Msg::User(text) => Msg::User(f(text)),
+                    Msg::User(parts) => {
+                        let text: String = parts.into_iter()
+                            .filter_map(|p| if let UserContent::Text(t) = p { Some(t) } else { None })
+                            .collect::<Vec<_>>().join("\n");
+                        Msg::User(vec![UserContent::Text(f(text))])
+                    }
                     other           => other,
                 };
                 bus_c.send(out);

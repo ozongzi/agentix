@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::request::UserContent;
+
 /// Trait for custom message types that can be sent through the event bus.
 pub trait CustomMsg: std::fmt::Debug + Send + Sync + 'static {
     fn as_any(&self) -> &dyn std::any::Any;
@@ -25,6 +27,7 @@ pub trait CustomMsg: std::fmt::Debug + Send + Sync + 'static {
 ///   ToolResult*   (one per ToolCall, after execution)
 /// Done
 /// ```
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub enum Msg {
     // ── Turn envelope ────────────────────────────────────────────────────────
@@ -34,8 +37,9 @@ pub enum Msg {
     Done,
 
     // ── Input ────────────────────────────────────────────────────────────────
-    /// A user message submitted to the agent / node.
-    User(String),
+    /// A user (human-side) message submitted to the agent / node.
+    /// May contain text and/or images.
+    User(Vec<UserContent>),
 
     // ── LLM output ───────────────────────────────────────────────────────────
     /// An LLM output token.  One chunk in streaming; the full text in assembled.

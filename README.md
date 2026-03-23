@@ -18,7 +18,7 @@ export DEEPSEEK_API_KEY="sk-..."
 
 ```toml
 [dependencies]
-agentix = "0.2"
+agentix = "0.3"
 tokio   = { version = "1", features = ["full"] }
 ```
 
@@ -100,7 +100,7 @@ Every event that flows through an [`EventBus`] is a `Msg`:
 |---------|------|
 | `TurnStart` | Generation turn begins |
 | `Done` | Turn (including all tool rounds) complete |
-| `User(String)` | User message submitted |
+| `User(Vec<UserContent>)` | User message submitted — text and/or images |
 | `Token(String)` | LLM output — one chunk in streaming, full text in assembled view |
 | `Reasoning(String)` | Reasoning trace (e.g. DeepSeek-R1) — same streaming/assembled duality |
 | `ToolCall { id, name, args }` | Complete tool invocation request |
@@ -237,7 +237,7 @@ let agent = agentix::deepseek("sk-...");
 Graph::new().edge(&prompt, &agent);
 
 // Send a raw user message into the template
-prompt.input().send(Msg::User("Hello world".into())).await.unwrap();
+prompt.input().send(Msg::User(vec![UserContent::Text("Hello world".into())])).await.unwrap();
 // agent receives: "Translate the following to Japanese:\nHello world"
 ```
 
@@ -258,7 +258,7 @@ let parser = OutputParser::new(|s| {
 });
 
 Graph::new().edge(&agent, &parser);
-// parser.output() emits Msg::User("7") (or whatever the model returned)
+// parser.output() emits Msg::User(vec!["7".into()]) (or whatever the model returned)
 ```
 
 ### Middleware
@@ -273,7 +273,10 @@ Graph::new()
     })
     .middleware(|msg| {
         // drop empty messages
-        if let Msg::User(ref s) = msg { if s.trim().is_empty() { return None; } }
+        if let Msg::User(ref parts) = msg {
+            let empty = parts.iter().all(|p| matches!(p, agentix::UserContent::Text(t) if t.trim().is_empty()));
+            if empty { return None; }
+        }
         Some(msg)
     })
     .edge(&a, &b)
@@ -294,7 +297,7 @@ Graph::new()
     .edge(&scorer,  &parser)
     .edge(&parser,  &logger);
 
-prompt.input().send(Msg::User("Great product!".into())).await.unwrap();
+prompt.input().send(Msg::User(vec!["Great product!".into()])).await.unwrap();
 ```
 
 ---
@@ -317,7 +320,14 @@ impl UpperCaseNode {
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 let out = match msg {
-                    Msg::User(s) => Msg::User(s.to_uppercase()),
+                    Msg::User(parts) => Msg::User(
+                        parts.into_iter()
+                            .map(|p| match p {
+                                agentix::UserContent::Text(t) => agentix::UserContent::Text(t.to_uppercase()),
+                                other => other,
+                            })
+                            .collect()
+                    ),
                     other        => other,
                 };
                 bus_c.send(out);
@@ -335,13 +345,44 @@ impl Node for UpperCaseNode {
 
 ---
 
+## Multimodal (vision)
+
+Send images alongside text using `send_parts`:
+
+```rust
+use agentix::{ImageContent, ImageData, UserContent};
+
+// URL image
+agent.send_parts(vec![
+    UserContent::Image(ImageContent {
+        data: ImageData::Url("https://example.com/chart.png".into()),
+        mime_type: "image/png".into(),
+    }),
+    UserContent::Text("Describe this chart.".into()),
+]).await;
+
+// Base64 image
+let bytes = std::fs::read("photo.jpg").unwrap();
+agent.send_parts(vec![
+    UserContent::Image(ImageContent {
+        data: ImageData::Base64(base64::encode(&bytes)),
+        mime_type: "image/jpeg".into(),
+    }),
+    UserContent::Text("What's in this photo?".into()),
+]).await;
+```
+
+For plain text, `agent.send("…")` still works unchanged.
+
+---
+
 ## MCP tools
 
 Use external processes as tools via the Model Context Protocol:
 
 ```toml
 [dependencies]
-agentix = { version = "0.2", features = ["mcp"] }
+agentix = { version = "0.3", features = ["mcp"] }
 ```
 
 ```rust
@@ -357,7 +398,7 @@ let agent = agentix::deepseek("sk-...")
 
 ```toml
 [dependencies]
-agentix = { version = "0.2", features = ["mcp-server"] }
+agentix = { version = "0.3", features = ["mcp-server"] }
 ```
 
 ### Stdio (Claude Desktop / MCP Studio)

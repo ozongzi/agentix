@@ -43,8 +43,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Graph::new()
         .middleware(|msg| {
-            if let Msg::User(ref s) = msg {
-                eprintln!("[edge →] {}", &s[..s.len().min(80)]);
+            if let Msg::User(ref parts) = msg {
+                let text: String = parts.iter()
+                    .filter_map(|p| if let agentix::UserContent::Text(t) = p { Some(t.as_str()) } else { None })
+                    .collect::<Vec<_>>().join(" ");
+                eprintln!("[edge →] {}", &text[..text.len().min(80)]);
             }
             Some(msg)
         })
@@ -64,12 +67,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Subscribe before sending so we don't miss any events.
         let mut stream = Box::pin(parser.output().subscribe_assembled());
-        prompt.input().send(Msg::User(review.into())).await?;
+        prompt.input().send(Msg::User(vec![review.into()])).await?;
 
         // Drain the parser's assembled output.
         while let Some(msg) = stream.next().await {
             match msg {
-                Msg::User(score) => {
+                Msg::User(parts) => {
+                    let score = parts.into_iter()
+                        .filter_map(|p| if let agentix::UserContent::Text(t) = p { Some(t) } else { None })
+                        .collect::<String>();
                     println!("Score: {score}\n");
                     break;
                 }
@@ -83,7 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("--- Watching scorer raw output for one more review ---\n");
 
     let mut rx = scorer.subscribe();
-    prompt.input().send(Msg::User("Exceptional! Exceeded all expectations.".into())).await?;
+    prompt.input().send(Msg::User(vec!["Exceptional! Exceeded all expectations.".into()])).await?;
 
     while let Ok(msg) = rx.recv().await {
         match msg {

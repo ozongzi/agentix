@@ -9,12 +9,13 @@ use crate::bus::EventBus;
 use crate::client::LlmClient;
 use crate::memory::{InMemory, Memory};
 use crate::msg::Msg;
+use crate::request::UserContent;
 use crate::tool_trait::{Tool, ToolBundle};
 
 // ── AgentInput ────────────────────────────────────────────────────────────────
 
 enum AgentInput {
-    Message(String),
+    Message(Vec<UserContent>),
     Abort,
 }
 
@@ -173,10 +174,15 @@ impl Agent {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
-    /// Send a user message.  Spawns the background task on first call.
+    /// Send a plain-text user message.  Spawns the background task on first call.
     pub async fn send(&self, msg: &str) {
+        self.send_parts(vec![UserContent::Text(msg.to_string())]).await;
+    }
+
+    /// Send a multimodal user message (text and/or images).
+    pub async fn send_parts(&self, parts: Vec<UserContent>) {
         let (inbox, _) = self.ensure_running();
-        if inbox.send(AgentInput::Message(msg.to_string())).await.is_err() {
+        if inbox.send(AgentInput::Message(parts)).await.is_err() {
             error!("agent inbox closed");
         }
     }
@@ -204,8 +210,8 @@ impl Agent {
             let agent = self.clone();
             tokio::spawn(async move {
                 while let Some(msg) = rx.recv().await {
-                    if let Msg::User(text) = msg {
-                        agent.send(&text).await;
+                    if let Msg::User(parts) = msg {
+                        agent.send_parts(parts).await;
                     }
                 }
             });
@@ -237,7 +243,7 @@ async fn agent_loop(
     // Wrap tools in Arc so concurrent tool-call futures can share it.
     let tools = Arc::new(tools);
     // Messages received while a generation is in-flight are buffered here.
-    let mut queued: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut queued: std::collections::VecDeque<Vec<UserContent>> = std::collections::VecDeque::new();
 
     loop {
         // ── Wait for next user message ────────────────────────────────────────
@@ -254,8 +260,9 @@ async fn agent_loop(
         };
 
         bus.send(Msg::TurnStart);
-        bus.send(Msg::User(user_msg.clone()));
-        memory.record(&Msg::User(user_msg)).await;
+        let user_ev = Msg::User(user_msg.clone());
+        memory.record(&user_ev).await;
+        bus.send(user_ev);
 
         // ── Tool-call rounds ──────────────────────────────────────────────────
         'turn: loop {
