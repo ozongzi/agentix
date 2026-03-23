@@ -1,78 +1,45 @@
-//! Example: chat using the Anthropic Messages API (Claude).
+//! REPL: chat with Claude (Anthropic).
 //!
 //! Run with:
 //!   ANTHROPIC_API_KEY=sk-ant-... cargo run --example anthropic_demo
 
-use agentix::{AgentEvent, AnthropicAgent};
-use futures::StreamExt;
+use agentix::Msg;
 use std::io::{self, Write};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let api_key = std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY must be set");
 
-    let mut agent = AnthropicAgent::official(api_key, "claude-sonnet-4-5")
-        .streaming()
-        .with_system_prompt("You are a helpful assistant.");
+    let agent = agentix::anthropic(api_key)
+        .model("claude-sonnet-4-5")
+        .system_prompt("You are a helpful assistant.");
 
-    println!("Chatting with Claude via Anthropic API (claude-sonnet-4-5).");
-    println!("Type a prompt and press Enter. Ctrl+C to exit.\n");
+    println!("Chatting with Claude (claude-sonnet-4-5). Ctrl+C to exit.\n");
 
     let mut line = String::new();
-
     loop {
         print!("> ");
         io::stdout().flush()?;
-
         line.clear();
-        if io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
-
+        if io::stdin().read_line(&mut line)? == 0 { break; }
         let prompt = line.trim();
-        if prompt.is_empty() {
-            continue;
-        }
+        if prompt.is_empty() { continue; }
 
-        let mut stream = agent.chat(prompt);
+        let mut rx = agent.subscribe();
+        agent.send(prompt).await;
 
-        while let Some(event) = stream.next().await {
-            match event {
-                Err(e) => {
-                    eprintln!("\nError: {e}");
-                    break;
-                }
-                Ok(AgentEvent::Token(text)) => {
-                    print!("{text}");
-                    io::stdout().flush().ok();
-                }
-                Ok(AgentEvent::ReasoningToken(text)) => {
-                    // Claude 3.7+ "thinking" blocks are automatically handled.
-                    print!("\n[Thinking] {text}");
-                    io::stdout().flush().ok();
-                }
-                Ok(AgentEvent::ToolCall(c)) => {
-                    if c.delta.is_empty() {
-                        println!("\n[calling {}]", c.name);
-                    } else {
-                        print!("{}", c.delta);
-                        io::stdout().flush().ok();
-                    }
-                }
-                Ok(AgentEvent::ToolResult(r)) => {
-                    println!("\n[result: {}]", r.result);
-                }
+        loop {
+            match rx.recv().await {
+                Ok(Msg::Token(t))     => { print!("{t}"); io::stdout().flush().ok(); }
+                Ok(Msg::Reasoning(r)) => { print!("\x1b[2m{r}\x1b[0m"); io::stdout().flush().ok(); }
+                Ok(Msg::ToolCall { name, .. })       => println!("\n[calling {name}]"),
+                Ok(Msg::ToolResult { result, .. })   => println!("[result] {result}"),
+                Ok(Msg::Done)  => break,
+                Ok(Msg::Error(e)) => { eprintln!("\nError: {e}"); break; }
+                Err(_) | Ok(_) => break,
             }
         }
-
         println!("\n");
-
-        if let Some(a) = stream.into_agent() {
-            agent = a;
-        } else {
-            break;
-        }
     }
-
     Ok(())
 }

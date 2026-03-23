@@ -1,12 +1,47 @@
 ## [Unreleased]
 
+---
+
+## [0.3.0] - 2026-03-23
+
+### Summary
+
+Graph architecture improvements: typed edges, shared state, and lifecycle safety.
+
 ### New features
 
-- `mcp-server` feature — expose any `ToolBundle` as a standards-compliant MCP server using the `rmcp` library.
+**`Graph::edge_map()` — caller-controlled edge transform**
+- New method `Graph::edge_map(&from, &to, fn(Msg) -> Option<Msg>)` that lets the caller choose exactly which messages cross the edge and how they are transformed.
+- Replaces the hardcoded `Token→User` conversion of `edge()` when typed payloads (e.g. `Msg::Custom`) need to be forwarded without string conversion.
+- `edge()` now delegates to `edge_map()` internally.
+
+**`GraphHandle` — explicit graph lifecycle**
+- `Graph::into_handle()` consumes the graph and returns a `GraphHandle`, a pure RAII guard.
+- Dropping `GraphHandle` aborts all edge background tasks — no more zombie tasks.
+- No public methods: abort early via `drop(handle)`.
+
+**`SharedContext` — global shared state for graph nodes**
+- New `agentix::SharedContext` type: a `Clone`-cheap `Arc<RwLock<HashMap<String, serde_json::Value>>>` injectable into any node.
+- API: `ctx.set(key, value)`, `ctx.get::<T>(key)`, `ctx.get_str(key)`, `ctx.remove(key)`, `ctx.snapshot()`.
+- `PromptTemplate::context(ctx)` — attaches a `SharedContext`; unresolved `{key}` placeholders (not covered by `.var()`) are looked up in the context at render time, enabling hot-swappable template variables.
+
+**`mcp-server` feature** (from previous unreleased)
+- Expose any `ToolBundle` as a standards-compliant MCP server using the `rmcp` library.
   - `McpServer::serve_stdio()` — stdio transport for Claude Desktop / MCP Studio integration.
   - `McpServer::serve_http(addr)` — Streamable HTTP transport, mounts the MCP endpoint at `/mcp`.
-  - `McpServer::into_http_service(config)` — returns a Tower-compatible `StreamableHttpService` for embedding in an existing Axum router.
-  - Builder methods `with_name()` and `with_version()` to customise the server info advertised during the MCP handshake.
+  - `McpServer::into_http_service(config)` — Tower-compatible `StreamableHttpService`.
+  - Builder methods `with_name()` and `with_version()`.
+
+### Bug fixes
+
+**`Graph::edge()` now forwards `Msg::User` messages**
+- Previously, `Msg::User` emitted by `PromptTemplate` or `OutputParser` was silently dropped by the default edge transform (`_ => None`), causing the downstream node to never receive the message and hanging the pipeline.
+- Fixed: the default transform now passes `Msg::User(_)` through unchanged, in addition to converting `Token(text)` → `User(text)` and passing `Custom(_)` unchanged.
+
+### Breaking changes
+
+- `Graph::edge_count()` previously tracked a separate `usize` counter; it now returns `self.handles.len()`. Behavior is identical.
+- Old code that calls `Graph::new()...edge(...)` without `into_handle()` continues to work (dropping `Graph` does **not** abort tasks — only `GraphHandle::drop` does). However, **call `into_handle()` and keep the result alive** to ensure tasks are properly cancelled on shutdown.
 
 ---
 

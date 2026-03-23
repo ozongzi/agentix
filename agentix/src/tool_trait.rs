@@ -24,8 +24,7 @@ use std::collections::HashMap;
 /// # Example
 ///
 /// ```no_run
-/// use agentix::{DeepSeekAgent, tool};
-/// use serde_json::{Value, json};
+/// use agentix::tool;
 ///
 /// struct Calc;
 ///
@@ -40,7 +39,8 @@ use std::collections::HashMap;
 /// }
 ///
 /// # #[tokio::main] async fn main() {
-/// let agent = DeepSeekAgent::new("sk-...").with_tool(Calc);
+/// let agent = agentix::deepseek(std::env::var("DEEPSEEK_API_KEY").unwrap())
+///     .tool(Calc);
 /// # }
 /// ```
 #[async_trait]

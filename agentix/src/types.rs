@@ -30,7 +30,7 @@ pub struct ToolCallResult {
     pub result: Value,
 }
 
-/// Events emitted by [`AgentStream`][crate::agent::AgentStream].
+/// Events emitted by [`AgentStream`][crate::agent::AgentStream] and [`Handle`][crate::agent::handle::Handle].
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     /// A text fragment from the assistant.
@@ -41,6 +41,8 @@ pub enum AgentEvent {
     ToolCall(ToolCallChunk),
     /// A tool has finished executing.
     ToolResult(ToolCallResult),
+    /// The current generation turn has finished (emitted by [`Handle`] only).
+    Done,
 }
 
 // ── Streaming accumulator ─────────────────────────────────────────────────────

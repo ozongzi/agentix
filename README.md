@@ -4,73 +4,129 @@
 [![docs.rs](https://img.shields.io/docsrs/agentix)](https://docs.rs/agentix)
 [![license](https://img.shields.io/crates/l/agentix.svg)](https://github.com/ozongzi/agentix/blob/main/LICENSE-MIT)
 
-A Rust framework for building LLM agents. Supports DeepSeek, OpenAI, Anthropic (Claude), and Google Gemini out of the box — plus any OpenAI-compatible endpoint. Define tools in plain Rust, plug them into an agent, and consume a stream of events as the model thinks, calls tools, and responds.
+A Rust framework for building LLM agents and multi-agent pipelines. Supports DeepSeek, OpenAI, Anthropic (Claude), and Google Gemini out of the box — plus any OpenAI-compatible endpoint.
+
+Agents are **actor-style**: send a message, observe a stream of events. Multiple agents wire together into a [`Graph`](#graph--multi-agent-pipelines) via typed channels.
 
 ---
 
 ## Quickstart
-
-Set your API key and add the dependency:
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
 ```
 
 ```toml
-# Cargo.toml
 [dependencies]
-agentix = "0.1"
-futures  = "0.3"
-tokio    = { version = "1", features = ["full"] }
-serde    = { version = "1", features = ["derive"] }
+agentix = "0.2"
+tokio   = { version = "1", features = ["full"] }
 ```
 
 ```rust
-use agentix::{AgentEvent, DeepSeekAgent, tool};
-use futures::StreamExt;
-use serde_json::{Value, json};
-
-struct Search;
-
-#[tool]
-impl agentix::Tool for Search {
-    /// Search the web and return results.
-    /// query: the search query
-    async fn search(&self, query: String) -> Value {
-        json!({ "results": format!("results for: {query}") })
-    }
-}
+use agentix::Msg;
 
 #[tokio::main]
 async fn main() {
-    let token = std::env::var("DEEPSEEK_API_KEY").unwrap();
+    let agent = agentix::deepseek(std::env::var("DEEPSEEK_API_KEY").unwrap())
+        .system_prompt("You are a helpful assistant.")
+        .max_tokens(1024);
 
-    let mut stream = DeepSeekAgent::new(token)
-        .with_tool(Search)
-        .chat("What's the latest news about Rust?");
+    let mut rx = agent.subscribe();
+    agent.send("What is the capital of France?").await;
 
-    while let Some(event) = stream.next().await {
-        match event.unwrap() {
-            AgentEvent::Token(text)       => print!("{text}"),
-            AgentEvent::ToolCall(c)       => println!("\n[calling {}]", c.name),
-            AgentEvent::ToolResult(r)     => println!("[result] {}", r.result),
-            AgentEvent::ReasoningToken(t) => print!("{t}"),
+    while let Ok(msg) = rx.recv().await {
+        match msg {
+            Msg::Token(t) => print!("{t}"),
+            Msg::Done     => break,
+            _             => {}
         }
     }
+    println!();
 }
 ```
 
-The agent runs the full loop for you: it calls the model, dispatches any tool calls, feeds the results back, and keeps going until the model stops requesting tools.
+---
+
+## Providers
+
+Four built-in providers, all using the same builder API:
+
+```rust
+// DeepSeek  (default model: deepseek-chat)
+let agent = agentix::deepseek("sk-...")
+    .model("deepseek-reasoner");
+
+// OpenAI  (default model: gpt-4o)
+let agent = agentix::openai("sk-...");
+
+// Anthropic / Claude  (default model: claude-opus-4-5)
+let agent = agentix::anthropic("sk-ant-...");
+
+// Gemini  (default model: gemini-2.0-flash)
+let agent = agentix::gemini("AIza...");
+
+// Any OpenAI-compatible endpoint
+use agentix::{Agent, LlmClient};
+let agent = Agent::new(LlmClient::openai_compatible(
+    "sk-...",
+    "https://openrouter.ai/api/v1",
+    "meta-llama/llama-3.3-70b-instruct:free",
+));
+```
+
+---
+
+## Builder chain
+
+All configuration methods return `Self`, so the whole setup is one expression:
+
+```rust
+let agent = agentix::deepseek("sk-...")
+    .model("deepseek-chat")
+    .system_prompt("You are a code reviewer.")
+    .temperature(0.2)
+    .max_tokens(4096)
+    .tool(MyTool)
+    .memory(agentix::SlidingWindow::new(20));
+```
+
+---
+
+## Msg — the event type
+
+Every event that flows through an [`EventBus`] is a `Msg`:
+
+| Variant | When |
+|---------|------|
+| `TurnStart` | Generation turn begins |
+| `Done` | Turn (including all tool rounds) complete |
+| `User(String)` | User message submitted |
+| `Token(String)` | LLM output — one chunk in streaming, full text in assembled view |
+| `Reasoning(String)` | Reasoning trace (e.g. DeepSeek-R1) — same streaming/assembled duality |
+| `ToolCall { id, name, args }` | Complete tool invocation request |
+| `ToolResult { call_id, name, result }` | Tool execution result |
+| `Error(String)` | Error during generation |
+| `Custom(Arc<dyn CustomMsg>)` | Application-defined payload |
+
+### Streaming vs assembled
+
+Subscribe to an [`EventBus`] in two ways:
+
+```rust
+// Raw streaming — Token arrives as individual chunks
+let mut rx = agent.subscribe();          // broadcast::Receiver<Msg>
+
+// Assembled — Token chunks folded into one Token(full_text) before Done
+let stream = agent.event_bus().subscribe_assembled();  // impl Stream<Item = Msg>
+```
+
+The assembled view looks identical to what a non-streaming provider emits — same variant names, just complete content.
 
 ---
 
 ## Defining tools
 
-Annotate an `impl Tool for YourStruct` block with `#[tool]`. Each method becomes a callable tool:
-
-- **Doc comment** on each method → tool description
-- **`/// param: description`** lines → argument descriptions
-- Return type just needs to be `serde::Serialize` — the macro handles the JSON schema
+Annotate `impl Tool for YourStruct` with `#[tool]`. Each method becomes a callable tool:
 
 ```rust
 use agentix::tool;
@@ -80,7 +136,7 @@ struct Calculator;
 
 #[tool]
 impl agentix::Tool for Calculator {
-    /// Add two numbers together.
+    /// Add two numbers.
     /// a: first number
     /// b: second number
     async fn add(&self, a: f64, b: f64) -> Value {
@@ -95,185 +151,216 @@ impl agentix::Tool for Calculator {
     }
 }
 
-// or just add it to an async fn
-
-#[tool]
-/// Divide two numbers.
-/// a: first number
-/// b: second number
-async fn divide(&self, a: f64, b: f64) -> Value {
-    json!({ "result": a / b })
-}
+let agent = agentix::deepseek("sk-...")
+    .tool(Calculator);
 ```
 
-One struct can have multiple methods — they register as separate tools. Stack as many tools as you need with `.with_tool(...)`.
+- Doc comment → tool description
+- `/// param: description` lines → argument descriptions
+- Return type just needs to implement `serde::Serialize`
 
 ---
 
-## Streaming
+## Memory
 
-Call `.streaming()` to get token-by-token output instead of waiting for the full response:
+Two built-in memory backends, or implement [`Memory`] yourself:
 
 ```rust
-let mut stream = DeepSeekAgent::new(token)
-    .streaming()
-    .with_tool(Search)
-    .chat("Search for something and summarise it");
+use agentix::{InMemory, SlidingWindow};
 
-while let Some(event) = stream.next().await {
-    match event.unwrap() {
-        AgentEvent::Token(t)      => { print!("{t}"); io::stdout().flush().ok(); }
-        AgentEvent::ToolCall(c)   => {
-            // In streaming mode, ToolCall fires once per SSE chunk.
-            // First chunk: c.delta is empty, c.name is set — good moment to show "calling X".
-            // Subsequent chunks: c.delta contains incremental argument JSON.
-            // In non-streaming mode, exactly one ToolCall fires with the full args in c.delta.
-            if c.delta.is_empty() { println!("\n[calling {}]", c.name); }
-        }
-        AgentEvent::ToolResult(r) => println!("[done] {}: {}", r.name, r.result),
-        _                         => {}
+// Keep all history (default)
+let agent = agentix::deepseek("sk-...").memory(InMemory::new());
+
+// Keep only the last N turns
+let agent = agentix::deepseek("sk-...").memory(SlidingWindow::new(20));
+```
+
+---
+
+## EventBus — observability
+
+Every agent publishes all events to its [`EventBus`]. Tap any bus without affecting the agent:
+
+```rust
+// Subscribe (get a Receiver)
+let mut rx = agent.subscribe();
+
+// Tap with an async callback (spawns a background task)
+agent.event_bus().tap(|msg| async move {
+    if let Msg::Token(t) = msg { print!("{t}"); }
+});
+
+// Assembled stream — one Token per turn instead of many chunks
+use futures::StreamExt;
+let mut stream = agent.event_bus().subscribe_assembled();
+while let Some(msg) = stream.next().await {
+    match msg {
+        Msg::Token(full) => println!("Response: {full}"),
+        Msg::Done        => break,
+        _                => {}
     }
 }
 ```
 
-### AgentEvent reference
-
-| Variant | When | Notes |
-|---------|------|-------|
-| `Token(String)` | Model is speaking | Streaming: one fragment per chunk. Non-streaming: whole reply at once. |
-| `ReasoningToken(String)` | Model is thinking | Only from reasoning models (e.g. `deepseek-reasoner`). |
-| `ToolCall(ToolCallChunk)` | Tool call in progress | `chunk.id`, `chunk.name`, `chunk.delta`. Streaming: multiple per call. Non-streaming: one per call. |
-| `ToolResult(ToolCallResult)` | Tool finished | `result.name`, `result.args`, `result.result`. |
-
 ---
 
-## Using a different model or provider
+## Graph — multi-agent pipelines
 
-Four providers are built in, each with its own typed agent and correct wire format:
+Wire [`Node`]s together with [`Graph`]. Each agent is a `Node` (has `input()` and `output()`).
+
+`Graph::edge(&from, &to)` reads `from`'s assembled output and feeds it as a user message into `to`'s input:
 
 ```rust
-use agentix::{DeepSeekAgent, OpenAIAgent, AnthropicAgent, GeminiAgent};
+use agentix::{Graph, PromptTemplate, OutputParser};
 
-// DeepSeek (default base URL: https://api.deepseek.com)
-let agent = DeepSeekAgent::new(token);                          // deepseek-chat
-let agent = DeepSeekAgent::new(token).with_model("deepseek-reasoner");
+// Simple two-agent chain
+let summariser  = agentix::deepseek("sk-...").system_prompt("Summarise in one sentence.");
+let translator  = agentix::deepseek("sk-...").system_prompt("Translate to French.");
 
-// DeepSeek via a custom endpoint (e.g. OpenRouter)
-let agent = DeepSeekAgent::custom(
-    "sk-or-...",
-    "https://openrouter.ai/api/v1",
-    "meta-llama/llama-3.3-70b-instruct:free",
-);
+Graph::new()
+    .edge(&summariser, &translator);
 
-// OpenAI — official API
-let agent = OpenAIAgent::official(token, "gpt-4o");
-
-// OpenAI — any compatible endpoint
-let agent = OpenAIAgent::new(token, "https://my-proxy.example.com/v1", "gpt-4o");
-
-// Anthropic (Claude) — official API
-let agent = AnthropicAgent::official(token, "claude-sonnet-4-5");
-
-// Anthropic — custom endpoint
-let agent = AnthropicAgent::new(token, "https://api.anthropic.com", "claude-opus-4-5");
-
-// Gemini — official API
-let agent = GeminiAgent::official(token, "gemini-2.0-flash");
-
-// Gemini — custom endpoint
-let agent = GeminiAgent::new(
-    token,
-    "https://generativelanguage.googleapis.com/v1beta",
-    "gemini-2.5-pro",
-);
+summariser.send("Long article text…").await;
+// translator automatically receives the summarised text
 ```
 
-All four agent types share the same builder API (`.streaming()`, `.with_tool()`, `.with_system_prompt()`, etc.) and produce the same `AgentEvent` stream.
+### PromptTemplate
 
----
-
-## Custom top-level request fields (`extra_body`)
-
-The `extra_body` mechanism merges arbitrary top-level JSON fields into the HTTP request body. Useful for provider-specific or experimental options not modelled by the typed request structure.
-
-Fields are flattened into the top-level JSON, so they appear as peers to `messages`, `model`, etc. Avoid colliding with those reserved keys.
+A lightweight [`Node`] that renders a template before forwarding:
 
 ```rust
-use serde_json::json;
-use agentix::DeepSeekAgent;
+let prompt = PromptTemplate::new("Translate the following to {lang}:\n{input}")
+    .var("lang", "Japanese");
 
-// Merge a map of fields
-let agent = DeepSeekAgent::new(token)
-    .extra_body({
-        let mut m = serde_json::Map::new();
-        m.insert("provider_option".to_string(), json!("value"));
-        m
-    });
+let agent = agentix::deepseek("sk-...");
 
-// Or set a single field
-let agent = DeepSeekAgent::new(token)
-    .extra_field("provider_option", json!("value"));
+Graph::new().edge(&prompt, &agent);
+
+// Send a raw user message into the template
+prompt.input().send(Msg::User("Hello world".into())).await.unwrap();
+// agent receives: "Translate the following to Japanese:\nHello world"
 ```
 
----
+Variables: `{input}` is replaced by the incoming `Msg::User` text; other `{key}` placeholders are pre-set with `.var(key, value)`.
 
-## Injecting messages mid-run
+### OutputParser
 
-Call `agent.interrupt_sender()` to get a channel sender that injects user messages into the running agent loop — useful when the user types something while tools are executing.
+A lightweight [`Node`] that transforms assembled text before forwarding:
 
 ```rust
-let agent = DeepSeekAgent::new(token)
-    .streaming()
-    .with_tool(SlowTool);
-
-// Grab the sender before consuming the agent into a stream.
-let tx = agent.interrupt_sender();
-
-// In another task, send an interrupt at any time.
-tokio::spawn(async move {
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    tx.send("Actually, cancel that and do X instead.".into()).unwrap();
+let agent  = agentix::deepseek("sk-...")
+    .system_prompt("Respond with only JSON: {\"score\": <0-10>}");
+let parser = OutputParser::new(|s| {
+    serde_json::from_str::<serde_json::Value>(&s)
+        .ok()
+        .and_then(|v| v["score"].as_i64().map(|n| n.to_string()))
+        .unwrap_or("0".into())
 });
 
-let mut stream = agent.chat("Do the slow thing.");
+Graph::new().edge(&agent, &parser);
+// parser.output() emits Msg::User("7") (or whatever the model returned)
 ```
 
-Behaviour:
-- **Between turns**: queued interrupts are drained before the next API call.
-- **During tool execution**: the running tool future is cancelled, a placeholder error result is recorded, and the injected message is appended to history before the next API turn.
-- The sender is `tokio::sync::mpsc::UnboundedSender<String>` — cheap to clone, non-blocking.
+### Middleware
+
+Middlewares run on every message crossing any edge. Return `None` to drop:
+
+```rust
+Graph::new()
+    .middleware(|msg| {
+        println!("[graph] {msg:?}");
+        Some(msg)
+    })
+    .middleware(|msg| {
+        // drop empty messages
+        if let Msg::User(ref s) = msg { if s.trim().is_empty() { return None; } }
+        Some(msg)
+    })
+    .edge(&a, &b)
+    .edge(&b, &c);
+```
+
+### Full pipeline
+
+```rust
+let prompt  = PromptTemplate::new("Score this review (0-10):\n{input}");
+let scorer  = agentix::deepseek("sk-...").system_prompt("Return only JSON: {\"score\": N}");
+let parser  = OutputParser::new(extract_score);
+let logger  = agentix::deepseek("sk-...").system_prompt("Log: score received was {input}");
+
+Graph::new()
+    .middleware(|msg| { log::debug!("{msg:?}"); Some(msg) })
+    .edge(&prompt,  &scorer)
+    .edge(&scorer,  &parser)
+    .edge(&parser,  &logger);
+
+prompt.input().send(Msg::User("Great product!".into())).await.unwrap();
+```
+
+---
+
+## Custom Node
+
+Implement [`Node`] to plug any async processor into a graph:
+
+```rust
+use agentix::{Node, EventBus, Msg};
+use tokio::sync::mpsc;
+
+struct UpperCaseNode { tx: mpsc::Sender<Msg>, bus: EventBus }
+
+impl UpperCaseNode {
+    fn new() -> Self {
+        let (tx, mut rx) = mpsc::channel(64);
+        let bus = EventBus::new(512);
+        let bus_c = bus.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                let out = match msg {
+                    Msg::User(s) => Msg::User(s.to_uppercase()),
+                    other        => other,
+                };
+                bus_c.send(out);
+            }
+        });
+        Self { tx, bus }
+    }
+}
+
+impl Node for UpperCaseNode {
+    fn input(&self)  -> mpsc::Sender<Msg> { self.tx.clone() }
+    fn output(&self) -> EventBus           { self.bus.clone() }
+}
+```
 
 ---
 
 ## MCP tools
 
-MCP (Model Context Protocol) lets you use external processes as tools — Node scripts, Python services, anything that speaks MCP over stdio:
+Use external processes as tools via the Model Context Protocol:
 
 ```toml
 [dependencies]
-agentix = { version = "0.1", features = ["mcp"] }
+agentix = { version = "0.2", features = ["mcp"] }
 ```
 
 ```rust
-use agentix::{DeepSeekAgent, McpTool};
+use agentix::McpTool;
 
-let agent = DeepSeekAgent::new(token)
-    .with_tool(McpTool::stdio("npx", &["-y", "@playwright/mcp"]).await?);
+let agent = agentix::deepseek("sk-...")
+    .tool(McpTool::stdio("npx", &["-y", "@playwright/mcp"]).await?);
 ```
 
 ---
 
 ## Exposing tools as an MCP server
 
-The `mcp-server` feature lets you turn any `ToolBundle` into a standalone MCP server so other LLM clients (Claude Desktop, MCP Studio, etc.) can call your Rust tools.
-
 ```toml
 [dependencies]
-agentix = { version = "0.1", features = ["mcp-server"] }
-tokio   = { version = "1", features = ["full"] }
+agentix = { version = "0.2", features = ["mcp-server"] }
 ```
 
-### Stdio mode (Claude Desktop / MCP Studio)
+### Stdio (Claude Desktop / MCP Studio)
 
 ```rust
 use agentix::{McpServer, ToolBundle, tool};
@@ -283,99 +370,37 @@ struct Calculator;
 #[tool]
 impl agentix::Tool for Calculator {
     /// Add two numbers.
-    /// a: first operand
-    /// b: second operand
+    /// a: first operand   b: second operand
     async fn add(&self, a: f64, b: f64) -> f64 { a + b }
-
-    /// Multiply two numbers.
-    /// a: first operand
-    /// b: second operand
-    async fn multiply(&self, a: f64, b: f64) -> f64 { a * b }
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     McpServer::new(ToolBundle::new().with(Calculator))
-        .with_name("my-calc-server")
+        .with_name("my-calc")
         .serve_stdio()
-        .await?;
-    Ok(())
+        .await
 }
 ```
 
-Register it in `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "my-calc": {
-      "command": "/path/to/your/binary"
-    }
-  }
-}
-```
-
-### HTTP mode (Streamable HTTP transport)
+### HTTP (Streamable HTTP transport)
 
 ```rust
-use agentix::{McpServer, ToolBundle, tool};
-
-struct Search;
-
-#[tool]
-impl agentix::Tool for Search {
-    /// Search the web.
-    /// query: what to search for
-    async fn search(&self, query: String) -> String {
-        format!("results for: {query}")
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    McpServer::new(ToolBundle::new().with(Search))
-        .serve_http("0.0.0.0:3000")
-        .await?;
-    Ok(())
-}
+McpServer::new(ToolBundle::new().with(MyTools))
+    .serve_http("0.0.0.0:3000")
+    .await?;
 ```
 
-### Custom routing
-
-For custom Axum routing, use `into_http_service()` to get a Tower-compatible service:
+### Custom Axum routing
 
 ```rust
 use agentix::{McpServer, ToolBundle};
-use rmcp::transport::streamable_http_server::tower::StreamableHttpServerConfig;
 
 let service = McpServer::new(ToolBundle::new().with(MyTools))
     .into_http_service(Default::default());
 
-let router = axum::Router::new()
-    .nest_service("/mcp", service)
-    .route("/health", axum::routing::get(|| async { "ok" }));
-
-let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-axum::serve(listener, router).await?;
-```
-
----
-
-## Tool Bundle
-
-`ToolBundle` groups multiple `Tool` implementations and builds a name→index map for O(1) dispatch.
-
-```rust
-use agentix::{DeepSeekAgent, ToolBundle};
-
-let tools = ToolBundle::new()
-    .with(FileTools)
-    .with(SearchTools)
-    .with(ShellTools);
-
-let agent = DeepSeekAgent::new(token)
-    .with_tool(tools)
-    .with_tool(UiTools { /* ... */ });
+let router = axum::Router::new().nest_service("/mcp", service);
+axum::serve(tokio::net::TcpListener::bind("0.0.0.0:3000").await?, router).await?;
 ```
 
 ---

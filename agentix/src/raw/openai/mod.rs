@@ -275,7 +275,7 @@ pub struct DeltaFunctionCall {
 
 // ── ProviderProtocol ─────────────────────────────────────────────────────────
 
-use crate::agent::agent_core::{DeepSeek, OpenAI};
+use crate::markers::{DeepSeek, OpenAI};
 use crate::request::ToolCall as AgentToolCall;
 use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 

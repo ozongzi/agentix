@@ -342,6 +342,14 @@ impl McpTool {
         (self.max_output_chars, self.max_content_items)
     }
 
+    /// Return the cached list of tool definitions advertised by this MCP server.
+    ///
+    /// This is a convenience inherent method so callers do not need to import
+    /// the [`Tool`] trait just to inspect the tool list.
+    pub fn raw_tools(&self) -> Vec<RawTool> {
+        self.tools.clone()
+    }
+
     /// Call `tools/list` (paginating automatically) and convert the MCP tool
     /// definitions into [`RawTool`]s understood by `ds-api`.
     async fn fetch_tools(peer: &Peer<RoleClient>) -> Result<Vec<RawTool>, McpError> {

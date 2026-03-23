@@ -1,46 +1,26 @@
-use agentix::{AgentEvent, DeepSeekAgent, tool};
-use futures::StreamExt;
-use serde_json::json;
+//! Quickstart: one-shot question with streaming output.
+//!
+//! Run with:
+//!   DEEPSEEK_API_KEY=sk-... cargo run --example readme_quick_example
 
-struct Echo;
-
-#[tool]
-impl Tool for Echo {
-    /// Echo the input string back as JSON.
-    async fn echo(&self, input: String) -> Value {
-        json!({ "echo": input })
-    }
-}
+use agentix::Msg;
+use std::io::Write;
 
 #[tokio::main]
 async fn main() {
-    // Ensure DEEPSEEK_API_KEY is set in your environment before running this example.
-    let token = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set");
+    let agent = agentix::deepseek(std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set"))
+        .system_prompt("You are a helpful assistant.")
+        .max_tokens(1024);
 
-    let agent = DeepSeekAgent::new(&token).with_tool(Echo);
+    let mut rx = agent.subscribe();
+    agent.send("What is the capital of France?").await;
 
-    // Use the agent to chat (non-streaming example).
-    let mut stream = agent.chat("Please echo: hello");
-
-    while let Some(event) = stream.next().await {
-        match event {
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                break;
-            }
-            Ok(AgentEvent::Token(text)) => {
-                println!("Assistant: {}", text);
-            }
-            Ok(AgentEvent::ReasoningToken(text)) => {
-                println!("[reasoning] {}", text);
-            }
-            Ok(AgentEvent::ToolCall(c)) => {
-                if c.delta.is_empty() { println!("[tool call start] {} (id={})", c.name, c.id); }
-                else { println!("[tool call args] {}: {}", c.id, c.delta); }
-            }
-            Ok(AgentEvent::ToolResult(res)) => {
-                println!("[tool result] {} -> {}", res.name, res.result);
-            }
+    while let Ok(msg) = rx.recv().await {
+        match msg {
+            Msg::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
+            Msg::Done     => break,
+            _             => {}
         }
     }
+    println!();
 }

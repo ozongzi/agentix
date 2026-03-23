@@ -316,7 +316,7 @@ pub type StreamChunk = Response;
 
 // ── ProviderProtocol ─────────────────────────────────────────────────────────
 
-use crate::agent::agent_core::Gemini;
+use crate::markers::Gemini;
 use crate::request::ToolCall as AgentToolCall;
 use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 

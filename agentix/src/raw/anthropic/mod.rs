@@ -306,7 +306,7 @@ pub struct StreamError {
 
 // ── ProviderProtocol ─────────────────────────────────────────────────────────
 
-use crate::agent::agent_core::Anthropic;
+use crate::markers::Anthropic;
 use crate::request::ToolCall as AgentToolCall;
 use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 

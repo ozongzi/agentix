@@ -1,133 +1,102 @@
-//! Example: injecting user messages mid-loop via `with_interrupt_channel`.
+//! Example: queuing a follow-up message while the agent is still running a tool,
+//! and aborting a turn in progress with `agent.abort()`.
 //!
-//! This example simulates a realistic scenario where the user sends a follow-up
-//! message *while* the agent is still executing tools.  The injected message is
-//! picked up automatically after the current tool-execution round finishes and
-//! is included in the conversation history before the next API turn — so the
-//! model naturally incorporates it into its next reply.
+//! Two scenarios are shown:
 //!
-//! What happens in this example:
+//! **Scenario A — follow-up queued mid-tool**: the agent starts a slow tool;
+//! a background task calls `agent.send()` after 500 ms.  The follow-up is
+//! appended to the inbox and processed after the current tool round finishes.
 //!
-//! 1. The agent starts a multi-step task that intentionally calls a slow tool.
-//! 2. A background task waits 500 ms (simulating the user typing) then sends a
-//!    follow-up message through the interrupt channel.
-//! 3. Once the tool round finishes, the agent sees the injected message and
-//!    incorporates it into its next reply without any special handling on our end.
+//! **Scenario B — abort**: `agent.abort()` cancels the current turn; the
+//! agent emits `Msg::Done` and is ready for the next message immediately.
 //!
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example interrupt
 
-use std::io::Write;
-
-use agentix::{AgentEvent, DeepSeekAgent, tool};
-use futures::StreamExt;
+use agentix::{Msg, tool};
 use serde_json::json;
+use std::io::Write;
 use tokio::time::{Duration, sleep};
-
-// ── Tool definition ───────────────────────────────────────────────────────────
 
 struct SlowCounter;
 
 #[tool]
-impl Tool for SlowCounter {
-    /// Count from 1 to n, sleeping briefly between each step, and return the
-    /// final count. Simulates a slow background task.
+impl agentix::Tool for SlowCounter {
+    /// Count from 1 to n with a 200 ms delay per step.
     /// n: how high to count
-    async fn count_to(&self, n: u32) -> Value {
+    async fn count_to(&self, n: u32) -> serde_json::Value {
         for i in 1..=n {
             sleep(Duration::from_millis(200)).await;
-            eprintln!("  [tool] counting… {i}/{n}");
+            eprintln!("  [tool] {i}/{n}");
         }
-        json!({ "final_count": n, "message": format!("counted to {n}") })
+        json!({ "final_count": n })
     }
 }
 
-// ── Main ──────────────────────────────────────────────────────────────────────
+async fn drain(rx: &mut tokio::sync::broadcast::Receiver<Msg>) {
+    loop {
+        match rx.recv().await {
+            Ok(Msg::Token(t))     => { print!("{t}"); std::io::stdout().flush().ok(); }
+            Ok(Msg::ToolCall { name, .. })     => println!("\n[calling {name}]"),
+            Ok(Msg::ToolResult { name, result, .. }) => println!("[{name}] -> {result}"),
+            Ok(Msg::Done)  => { println!(); break; }
+            Ok(Msg::Error(e)) => { eprintln!("Error: {e}"); break; }
+            Err(_) | Ok(_) => break,
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set");
 
-    // Build the agent and get the sender half of the interrupt channel.
-    let agent = DeepSeekAgent::new(&token)
-        .streaming()
-        .with_system_prompt(
-            "You are a helpful assistant. \
-             When the user asks you to count, use the count_to tool. \
-             Always acknowledge any follow-up messages from the user.",
-        )
-        .with_tool(SlowCounter);
+    // ── Scenario A: follow-up queued while tool is running ────────────────────
+    println!("=== Scenario A: follow-up message queued mid-tool ===\n");
 
-    // Spawn a task that injects a follow-up message after a short delay.
-    // This fires while the tool is still running (each step takes 200 ms,
-    // the tool counts to 5 → ~1 s total; we inject at 500 ms).
-    let tx_clone = agent.interrupt_sender();
+    let agent = agentix::deepseek(&token)
+        .system_prompt(
+            "You are a helpful assistant. \
+             When asked to count, use count_to. \
+             Always acknowledge follow-up messages.",
+        )
+        .tool(SlowCounter);
+
+    let mut rx = agent.subscribe();
+    agent.send("Count to 5 using count_to.").await;
+
+    // Queue a follow-up 500 ms later — while the tool is still running.
+    let agent2 = agent.clone();
     tokio::spawn(async move {
         sleep(Duration::from_millis(500)).await;
-        println!("\n[user injects] \"Actually, please also tell me the square of that number.\"\n");
-        tx_clone
-            .send("Actually, please also tell me the square of that number.".into())
-            .expect("channel closed unexpectedly");
+        println!("\n[queuing follow-up]\n");
+        agent2.send("Also tell me the square of that number.").await;
     });
 
-    println!("Asking the agent to count to 5 (tool takes ~1 s)…\n");
+    // First turn (count_to)
+    drain(&mut rx).await;
+    // Second turn (square — queued follow-up)
+    drain(&mut rx).await;
 
-    let mut stream = agent.chat("Please count to 5 using the count_to tool.");
+    // ── Scenario B: abort ────────────────────────────────────────────────────
+    println!("\n=== Scenario B: abort ===\n");
 
-    while let Some(event) = stream.next().await {
-        match event {
-            Err(e) => {
-                eprintln!("\nError: {e}");
-                break;
-            }
+    let agent = agentix::deepseek(token)
+        .system_prompt("You are a helpful assistant.")
+        .tool(SlowCounter);
 
-            Ok(AgentEvent::Token(fragment)) => {
-                print!("{fragment}");
-                std::io::stdout().flush().ok();
-            }
+    let mut rx = agent.subscribe();
+    agent.send("Count to 10 using count_to.").await;
 
-            Ok(AgentEvent::ToolCall(c)) => {
-                if c.delta.is_empty() {
-                    println!("\n[calling {}]", c.name);
-                }
-            }
+    // Abort after the tool starts but before it finishes.
+    let agent3 = agent.clone();
+    tokio::spawn(async move {
+        sleep(Duration::from_millis(300)).await;
+        println!("\n[aborting turn]\n");
+        agent3.abort().await;
+    });
 
-            Ok(AgentEvent::ToolResult(r)) => {
-                println!("\n[tool result] {} -> {}", r.name, r.result);
-                println!("\n(injected message will be picked up before the next API turn)\n");
-            }
-
-            Ok(_) => todo!(),
-        }
-    }
-
-    println!("\n\n--- conversation complete ---");
-
-    // The agent can be recovered and reused for further turns.
-    if let Some(recovered) = stream.into_agent() {
-        let history = recovered.history();
-        println!("\nFinal history ({} messages):", history.len());
-        for msg in history {
-            use agentix::Message;
-            let (role, preview) = match msg {
-                Message::User(parts) => {
-                    let text = parts.iter().filter_map(|p| {
-                        if let agentix::request::UserContent::Text(t) = p { Some(t.as_str()) } else { None }
-                    }).collect::<Vec<_>>().join(" ");
-                    ("user", text.chars().take(80).collect::<String>())
-                }
-                Message::Assistant { content, .. } => {
-                    let preview = content.as_deref().unwrap_or("<no content>")
-                        .chars().take(80).collect::<String>();
-                    ("assistant", preview)
-                }
-                Message::ToolResult { content, .. } => {
-                    ("tool", content.chars().take(80).collect::<String>())
-                }
-            };
-            println!("  [{role}] {preview}");
-        }
-    }
+    drain(&mut rx).await;
+    println!("Agent ready for next message after abort.");
 
     Ok(())
 }
