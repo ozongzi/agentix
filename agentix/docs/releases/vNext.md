@@ -89,8 +89,9 @@ The goal is to provide a safer, clearer, and more extensible API surface while k
 - `#[tool]` macro JSON schema generation
   - Replaced string-based type matching with recursive `syn::Type` structural matching.
   - `Vec<T>` now correctly generates `{"type": "array", "items": <T schema>}`.
-  - Path-qualified types such as `std::string::String` now resolve to `"string"`.
+  - Path-qualified types such as `std::string::String` resolve to `"string"`.
   - All integer primitives (`u8`–`u128`, `i8`–`i128`, `usize`, `isize`) are explicitly matched instead of relying on fallthrough.
+  - **Added support for `Result<T, E>` return types.** If a tool returns `Ok(v)`, it serializes to `v`. If it returns `Err(e)`, it automatically returns `{"error": e.to_string()}` to the LLM, allowing for graceful error propagation without custom boilerplate.
 
 ---
 
@@ -223,6 +224,7 @@ cargo run --example agent_demo
   - Added `DeepseekAgent::with_streaming()` for SSE-based text streaming.
   - `#[tool]` macro: argument parse failures now return an error JSON to the LLM instead of panicking.
   - `#[tool]` macro: JSON schema generation now uses `syn::Type` structural matching (`Vec<T>`, path-qualified types, all integer primitives handled correctly).
+  - `#[tool]` macro: Added support for `Result<T, E>` return types (Ok -> success, Err -> `{"error": e.to_string()}`).
 
 ---
 

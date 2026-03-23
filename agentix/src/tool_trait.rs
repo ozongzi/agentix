@@ -175,3 +175,34 @@ impl<T: Tool + 'static> std::ops::AddAssign<T> for ToolBundle {
         self.push(rhs);
     }
 }
+
+// ── dtolnay trick (autoref specialization) ──────────────────────────────────
+
+#[doc(hidden)]
+pub trait ToolResultResult {
+    fn __agentix_wrap(self) -> Value;
+}
+
+impl<T: serde::Serialize, E: std::fmt::Display> ToolResultResult for Result<T, E> {
+    fn __agentix_wrap(self) -> Value {
+        match self {
+            Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| {
+                json!({ "error": format!("serialization error: {e}") })
+            }),
+            Err(e) => json!({ "error": e.to_string() }),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait ToolResultValue {
+    fn __agentix_wrap(self) -> Value;
+}
+
+impl<T: serde::Serialize> ToolResultValue for &T {
+    fn __agentix_wrap(self) -> Value {
+        serde_json::to_value(self).unwrap_or_else(|e| {
+            json!({ "error": format!("serialization error: {e}") })
+        })
+    }
+}

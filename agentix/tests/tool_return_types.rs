@@ -98,6 +98,34 @@ impl Tool for ListTool {
     }
 }
 
+/// Returns a `Result<T, E>` — `Ok` serializes to `T`, `Err` to `{ "error": E.to_string() }`.
+struct ResultTool;
+
+#[tool]
+impl Tool for ResultTool {
+    async fn run(&self, success: bool) -> Result<String, String> {
+        if success {
+            Ok("success".to_string())
+        } else {
+            Err("failed".to_string())
+        }
+    }
+}
+
+/// Returns a `Result<T, anyhow::Error>` (or similar) to test Display-based error formatting.
+struct AnyhowResultTool;
+
+#[tool]
+impl Tool for AnyhowResultTool {
+    async fn run(&self, success: bool) -> Result<i32, std::io::Error> {
+        if success {
+            Ok(42)
+        } else {
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "io error"))
+        }
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async fn call(tool: &impl Tool, name: &str, args: Value) -> Value {
@@ -172,4 +200,28 @@ async fn bad_argument_type_returns_error_json() {
             .unwrap()
             .contains("invalid argument")
     );
+}
+
+#[tokio::test]
+async fn result_tool_ok_returns_string() {
+    let result = call(&ResultTool, "run", json!({ "success": true })).await;
+    assert_eq!(result, json!("success"));
+}
+
+#[tokio::test]
+async fn result_tool_err_returns_error_object() {
+    let result = call(&ResultTool, "run", json!({ "success": false })).await;
+    assert_eq!(result, json!({ "error": "failed" }));
+}
+
+#[tokio::test]
+async fn result_tool_with_typed_error_returns_stringified_error() {
+    let result = call(&AnyhowResultTool, "run", json!({ "success": false })).await;
+    assert_eq!(result, json!({ "error": "io error" }));
+}
+
+#[tokio::test]
+async fn result_tool_with_typed_error_returns_ok_value() {
+    let result = call(&AnyhowResultTool, "run", json!({ "success": true })).await;
+    assert_eq!(result, json!(42));
 }

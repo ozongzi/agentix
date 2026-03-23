@@ -123,6 +123,9 @@ pub use tool_trait::{Tool, ToolBundle};
 
 pub use agentix_macros::tool;
 pub use schemars;
+pub use serde;
+pub use serde_json;
+pub use async_trait;
 
 #[cfg(feature = "mcp")]
 pub use mcp::McpTool;

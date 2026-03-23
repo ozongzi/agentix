@@ -154,9 +154,9 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
             let ty = &p.ty;
             quote! {{
                 let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
-                let mut prop = serde_json::to_value(schema).unwrap();
+                let mut prop = agentix::serde_json::to_value(schema).unwrap();
                 if let Some(obj) = prop.as_object_mut() {
-                    obj.insert("description".to_string(), serde_json::json!(#pdesc));
+                    obj.insert("description".to_string(), agentix::serde_json::json!(#pdesc));
                 }
                 properties.insert(#pname.to_string(), prop);
             }}
@@ -169,11 +169,11 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
             .collect();
         quote! {{
             let mut __gen = agentix::schemars::SchemaGenerator::default();
-            let mut properties = serde_json::Map::new();
+            let mut properties = agentix::serde_json::Map::new();
             #(#prop_inserts)*
 
             let required: Vec<&str> = vec![#(#required),*];
-            let mut parameters = serde_json::json!({
+            let mut parameters = agentix::serde_json::json!({
                 "type": "object",
                 "properties": properties,
                 "required": required,
@@ -182,7 +182,7 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
             // 如果引入了复杂类型，提取 definitions 并注入到 $defs
             let defs = __gen.take_definitions();
             if !defs.is_empty() {
-                parameters["$defs"] = serde_json::to_value(defs).unwrap();
+                parameters["$defs"] = agentix::serde_json::to_value(defs).unwrap();
             }
 
             agentix::raw::shared::ToolDefinition {
@@ -205,11 +205,11 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
             let pname_str = &p.name;
             let ty = &p.ty;
             quote! {
-                let #pname: #ty = match serde_json::from_value(
-                    args.get(#pname_str).cloned().unwrap_or(serde_json::Value::Null)
+                let #pname: #ty = match agentix::serde_json::from_value(
+                    args.get(#pname_str).cloned().unwrap_or(agentix::serde_json::Value::Null)
                 ) {
                     Ok(v) => v,
-                    Err(e) => return serde_json::json!({
+                    Err(e) => return agentix::serde_json::json!({
                         "error": format!("invalid argument '{}': {}", #pname_str, e)
                     }),
                 };
@@ -219,10 +219,11 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
             #tool_name => {
                 #(#arg_parses)*
                 let __result = (async move || { #body })().await;
-                match serde_json::to_value(__result) {
-                    Ok(v) => v,
-                    Err(e) => serde_json::json!({ "error": format!("serialization error: {}", e) }),
-                }
+
+                #[allow(unused_imports)]
+                use agentix::tool_trait::{ToolResultResult, ToolResultValue};
+
+                (__result).__agentix_wrap()
             }
         }
     };
@@ -231,16 +232,16 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
         #[allow(non_camel_case_types)]
         pub struct #struct_ident;
 
-        #[async_trait::async_trait]
+        #[agentix::async_trait::async_trait]
         impl agentix::tool_trait::Tool for #struct_ident {
             fn raw_tools(&self) -> Vec<agentix::raw::shared::ToolDefinition> {
                 vec![#raw_tools_body]
             }
 
-            async fn call(&self, name: &str, args: serde_json::Value) -> serde_json::Value {
+            async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::serde_json::Value {
                 match name {
                     #call_arm
-                    _ => serde_json::json!({"error": format!("unknown tool: {}", name)}),
+                    _ => agentix::serde_json::json!({"error": format!("unknown tool: {}", name)}),
                 }
             }
         }
@@ -312,9 +313,9 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             let ty = &p.ty;
             quote! {{
                 let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
-                let mut prop = serde_json::to_value(schema).unwrap();
+                let mut prop = agentix::serde_json::to_value(schema).unwrap();
                 if let Some(obj) = prop.as_object_mut() {
-                    obj.insert("description".to_string(), serde_json::json!(#pdesc));
+                    obj.insert("description".to_string(), agentix::serde_json::json!(#pdesc));
                 }
                 properties.insert(#pname.to_string(), prop);
             }}
@@ -327,11 +328,11 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             .collect();
         quote! {{
             let mut __gen = agentix::schemars::SchemaGenerator::default();
-            let mut properties = serde_json::Map::new();
+            let mut properties = agentix::serde_json::Map::new();
             #(#prop_inserts)*
 
             let required: Vec<&str> = vec![#(#required),*];
-            let mut parameters = serde_json::json!({
+            let mut parameters = agentix::serde_json::json!({
                 "type": "object",
                 "properties": properties,
                 "required": required,
@@ -340,7 +341,7 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             // 同样为 impl 块内的参数注入可能生成的 definitions
             let defs = __gen.take_definitions();
             if !defs.is_empty() {
-                parameters["$defs"] = serde_json::to_value(defs).unwrap();
+                parameters["$defs"] = agentix::serde_json::to_value(defs).unwrap();
             }
 
             agentix::raw::shared::ToolDefinition {
@@ -363,11 +364,11 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             let pname_str = &p.name;
             let ty = &p.ty;
             quote! {
-                let #pname: #ty = match serde_json::from_value(
-                    args.get(#pname_str).cloned().unwrap_or(serde_json::Value::Null)
+                let #pname: #ty = match agentix::serde_json::from_value(
+                    args.get(#pname_str).cloned().unwrap_or(agentix::serde_json::Value::Null)
                 ) {
                     Ok(v) => v,
-                    Err(e) => return serde_json::json!({
+                    Err(e) => return agentix::serde_json::json!({
                         "error": format!("invalid argument '{}': {}", #pname_str, e)
                     }),
                 };
@@ -377,10 +378,11 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             #tool_name => {
                 #(#arg_parses)*
                 let __result = (async move || { #body })().await;
-                match serde_json::to_value(__result) {
-                    Ok(v) => v,
-                    Err(e) => serde_json::json!({ "error": format!("serialization error: {}", e) }),
-                }
+
+                #[allow(unused_imports)]
+                use agentix::tool_trait::{ToolResultResult, ToolResultValue};
+
+                (__result).__agentix_wrap()
             }
         }
     });
@@ -388,16 +390,16 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let self_ty = &item_impl.self_ty;
 
     let expanded = quote! {
-        #[async_trait::async_trait]
+        #[agentix::async_trait::async_trait]
         impl agentix::tool_trait::Tool for #self_ty {
             fn raw_tools(&self) -> Vec<agentix::raw::shared::ToolDefinition> {
                 vec![#(#raw_tools_body),*]
             }
 
-            async fn call(&self, name: &str, args: serde_json::Value) -> serde_json::Value {
+            async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::serde_json::Value {
                 match name {
                     #(#call_arms)*
-                    _ => serde_json::json!({"error": format!("unknown tool: {}", name)}),
+                    _ => agentix::serde_json::json!({"error": format!("unknown tool: {}", name)}),
                 }
             }
         }
