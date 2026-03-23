@@ -1,42 +1,27 @@
 use async_trait::async_trait;
 use futures::StreamExt;
-use tracing::{debug, warn};
+use futures::stream::BoxStream;
 
-use crate::msg::Msg;
+use crate::msg::{AgentInput, AgentEvent, LlmEvent};
 use crate::request::{Message, Request};
 use crate::client::LlmClient;
 
-/// A component that records bus events and provides conversation context.
-///
-/// Implement this to customise how history is stored, compressed, or retrieved.
-/// The agent loop calls [`record`] for every [`Msg`] it broadcasts and calls
-/// [`context`] before each LLM request to get the message history.
-///
-/// # Built-in implementations
-/// - [`InMemory`] — keeps all messages in a `Vec` (default)
-/// - [`SlidingWindow`] — keeps the last N messages
-/// - [`TokenSlidingWindow`] — keeps messages up to a Token limit
-/// - [`LlmSummarizer`] — summarises old messages using an LLM
+/// A component that records conversation events and provides context.
 #[async_trait]
 pub trait Memory: Send {
-    /// Called for every message emitted on the bus during a turn.
-    async fn record(&mut self, msg: &Msg);
+    async fn record_input(&mut self, input: &AgentInput);
+    async fn record_event(&mut self, event: &AgentEvent);
 
     /// Returns the conversation history used to build the next LLM request.
-    /// Implementations may summarise, truncate, or semantically retrieve here.
     async fn context(&self) -> Vec<Message>;
 }
 
 // ── InMemory ──────────────────────────────────────────────────────────────────
 
-/// Full in-memory history — the default [`Memory`] implementation.
 pub struct InMemory {
     messages: Vec<Message>,
-    /// Buffer for accumulating assistant token stream before committing.
     assistant_buf: String,
-    /// Buffer for reasoning tokens.
     reasoning_buf: String,
-    /// Pending tool calls (id → (name, args)).
     tool_call_bufs: std::collections::HashMap<String, (String, String)>,
 }
 
@@ -56,73 +41,90 @@ impl InMemory {
         }
     }
 
-    /// Seed with existing history (e.g. loaded from a database).
     pub fn with_history(mut self, history: Vec<Message>) -> Self {
         self.messages = history;
         self
     }
 
-    /// Access raw messages.
     pub fn messages(&self) -> &[Message] {
         &self.messages
     }
 
-    /// Set messages directly (used by summarizers).
     pub fn set_messages(&mut self, messages: Vec<Message>) {
         self.messages = messages;
+    }
+
+    fn flush_assistant(&mut self) {
+        let mut tool_calls: Vec<crate::request::ToolCall> = self
+            .tool_call_bufs
+            .drain()
+            .map(|(id, (name, arguments))| crate::request::ToolCall { id, name, arguments })
+            .collect();
+        
+        if self.assistant_buf.is_empty() && self.reasoning_buf.is_empty() && tool_calls.is_empty() {
+            return;
+        }
+
+        tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let content = if self.assistant_buf.is_empty() { None } else { Some(self.assistant_buf.clone()) };
+        let reasoning = if self.reasoning_buf.is_empty() { None } else { Some(self.reasoning_buf.clone()) };
+
+        self.messages.push(Message::Assistant {
+            content,
+            reasoning,
+            tool_calls,
+        });
+
+        self.assistant_buf.clear();
+        self.reasoning_buf.clear();
     }
 }
 
 #[async_trait]
 impl Memory for InMemory {
-    async fn record(&mut self, msg: &Msg) {
-        match msg {
-            Msg::User(parts) => {
+    async fn record_input(&mut self, input: &AgentInput) {
+        match input {
+            AgentInput::User(parts) => {
                 self.messages.push(Message::User(parts.clone()));
             }
-            Msg::Token(t) => {
-                self.assistant_buf.push_str(t);
-            }
-            Msg::Reasoning(t) => {
-                self.reasoning_buf.push_str(t);
-            }
-            Msg::ToolCall { id, name, args } => {
-                let entry = self.tool_call_bufs
-                    .entry(id.clone())
-                    .or_insert_with(|| (name.clone(), String::new()));
-                entry.1.push_str(args);
-            }
-            Msg::ToolResult { call_id, name, result } => {
+            AgentInput::ToolResult { call_id, result } => {
+                self.flush_assistant();
                 self.messages.push(Message::ToolResult {
                     call_id: call_id.clone(),
                     content: result.to_string(),
                 });
-                let _ = (name,);
             }
-            Msg::Done => {
-                // Commit accumulated assistant turn to history.
-                let mut tool_calls: Vec<crate::request::ToolCall> = self
-                    .tool_call_bufs
-                    .drain()
-                    .map(|(id, (name, arguments))| crate::request::ToolCall { id, name, arguments })
-                    .collect();
-                
-                // Sort by ID to ensure deterministic order if multiple tools were called.
-                tool_calls.sort_by(|a, b| a.id.cmp(&b.id));
+            AgentInput::Abort => {}
+        }
+    }
 
-                let content = if self.assistant_buf.is_empty() { None } else { Some(self.assistant_buf.clone()) };
-                let reasoning = if self.reasoning_buf.is_empty() { None } else { Some(self.reasoning_buf.clone()) };
-
-                if content.is_some() || !tool_calls.is_empty() || reasoning.is_some() {
-                    self.messages.push(Message::Assistant {
-                        content,
-                        reasoning,
-                        tool_calls,
-                    });
-                }
-
-                self.assistant_buf.clear();
-                self.reasoning_buf.clear();
+    async fn record_event(&mut self, event: &AgentEvent) {
+        match event {
+            AgentEvent::Token(t) => {
+                self.assistant_buf.push_str(t);
+            }
+            AgentEvent::Reasoning(t) => {
+                self.reasoning_buf.push_str(t);
+            }
+            AgentEvent::ToolCallChunk(_) => {
+                // Chunks are for streaming display, we only record the fully assembled ToolCall.
+            }
+            AgentEvent::ToolCall(tc) => {
+                self.tool_call_bufs
+                    .entry(tc.id.clone())
+                    .or_insert_with(|| (tc.name.clone(), String::new()))
+                    .1.push_str(&tc.arguments);
+            }
+            AgentEvent::ToolResult { call_id, result, .. } => {
+                self.flush_assistant();
+                self.messages.push(Message::ToolResult {
+                    call_id: call_id.clone(),
+                    content: result.to_string(),
+                });
+            }
+            AgentEvent::Done => {
+                self.flush_assistant();
             }
             _ => {}
         }
@@ -135,7 +137,6 @@ impl Memory for InMemory {
 
 // ── SlidingWindow ─────────────────────────────────────────────────────────────
 
-/// Keeps only the last `max` messages (by count), discarding older ones.
 pub struct SlidingWindow {
     inner: InMemory,
     max:   usize,
@@ -149,9 +150,8 @@ impl SlidingWindow {
 
 #[async_trait]
 impl Memory for SlidingWindow {
-    async fn record(&mut self, msg: &Msg) {
-        self.inner.record(msg).await;
-    }
+    async fn record_input(&mut self, input: &AgentInput) { self.inner.record_input(input).await; }
+    async fn record_event(&mut self, event: &AgentEvent) { self.inner.record_event(event).await; }
 
     async fn context(&self) -> Vec<Message> {
         let all = self.inner.context().await;
@@ -166,7 +166,6 @@ impl Memory for SlidingWindow {
 
 // ── TokenSlidingWindow ────────────────────────────────────────────────────────
 
-/// Keeps messages up to a maximum Token limit, discarding oldest messages first.
 pub struct TokenSlidingWindow {
     inner: InMemory,
     max_tokens: usize,
@@ -180,16 +179,14 @@ impl TokenSlidingWindow {
 
 #[async_trait]
 impl Memory for TokenSlidingWindow {
-    async fn record(&mut self, msg: &Msg) {
-        self.inner.record(msg).await;
-    }
+    async fn record_input(&mut self, input: &AgentInput) { self.inner.record_input(input).await; }
+    async fn record_event(&mut self, event: &AgentEvent) { self.inner.record_event(event).await; }
 
     async fn context(&self) -> Vec<Message> {
         let all = self.inner.context().await;
         let mut total = 0;
         let mut result = Vec::new();
 
-        // Iterate backwards to keep the most recent messages
         for msg in all.into_iter().rev() {
             let tokens = msg.estimate_tokens();
             if total + tokens > self.max_tokens && !result.is_empty() {
@@ -205,13 +202,10 @@ impl Memory for TokenSlidingWindow {
 
 // ── LlmSummarizer ─────────────────────────────────────────────────────────────
 
-/// Summarises older conversation history using an LLM when a Token limit is reached.
 pub struct LlmSummarizer {
     inner: InMemory,
     client: LlmClient,
-    /// Threshold to trigger summarization.
     trigger_at_tokens: usize,
-    /// Keep at least this many recent messages untouched.
     keep_recent: usize,
 }
 
@@ -225,11 +219,6 @@ impl LlmSummarizer {
         }
     }
 
-    pub fn with_keep_recent(mut self, n: usize) -> Self {
-        self.keep_recent = n;
-        self
-    }
-
     async fn summarize_if_needed(&mut self) {
         let messages = self.inner.messages();
         if messages.len() <= self.keep_recent {
@@ -241,61 +230,45 @@ impl LlmSummarizer {
             return;
         }
 
-        debug!(total_tokens, threshold = self.trigger_at_tokens, "triggering LLM summarization");
-
         let to_summarize = &messages[..messages.len() - self.keep_recent];
         let recent = &messages[messages.len() - self.keep_recent..];
 
         let mut summary_req = Request::default();
-        summary_req.system_message = Some("You are a helpful assistant. Summarize the following conversation history concisely while preserving key facts and state.".to_string());
         summary_req.messages = to_summarize.to_vec();
-        summary_req.max_tokens = Some(512);
-
-        // We use a simplified non-streaming call for summarization
-        // Since Agent handles the complexity, we'll try to get a simple response.
-        let mut stream = match self.client.stream(&summary_req.messages, &[]).await {
+        
+        let mut stream: BoxStream<'static, LlmEvent> = match self.client.stream(&summary_req.messages, &[]).await {
             Ok(s) => s,
-            Err(e) => {
-                warn!(error = %e, "summarization failed to start");
-                return;
-            }
+            Err(_) => return,
         };
 
         let mut summary_text = String::new();
         while let Some(msg) = stream.next().await {
             match msg {
-                Msg::Token(t) => summary_text.push_str(&t),
-                Msg::Error(e) => {
-                    warn!(error = %e, "summarization stream error");
-                    return;
-                }
-                Msg::Done => break,
+                LlmEvent::Token(t) => summary_text.push_str(&t),
+                LlmEvent::Done => break,
                 _ => {}
             }
         }
 
-        if summary_text.is_empty() {
-            warn!("summarization returned empty text");
-            return;
+        if !summary_text.is_empty() {
+            let mut new_history = Vec::new();
+            new_history.push(Message::Assistant {
+                content: Some(format!("[auto-summary] {}", summary_text)),
+                reasoning: None,
+                tool_calls: vec![],
+            });
+            new_history.extend_from_slice(recent);
+            self.inner.set_messages(new_history);
         }
-
-        let mut new_history = Vec::new();
-        new_history.push(Message::Assistant {
-            content: Some(format!("[auto-summary] {}", summary_text)),
-            reasoning: None,
-            tool_calls: vec![],
-        });
-        new_history.extend_from_slice(recent);
-
-        self.inner.set_messages(new_history);
     }
 }
 
 #[async_trait]
 impl Memory for LlmSummarizer {
-    async fn record(&mut self, msg: &Msg) {
-        self.inner.record(msg).await;
-        if matches!(msg, Msg::Done) {
+    async fn record_input(&mut self, input: &AgentInput) { self.inner.record_input(input).await; }
+    async fn record_event(&mut self, event: &AgentEvent) {
+        self.inner.record_event(event).await;
+        if matches!(event, AgentEvent::Done) {
             self.summarize_if_needed().await;
         }
     }

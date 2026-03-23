@@ -3,9 +3,10 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example agent_demo
 
-use agentix::{Msg, tool};
+use agentix::{AgentEvent, AgentInput, Node, tool};
+use futures::StreamExt;
 use reqwest::Client;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::io::Write;
 
 struct WeatherTool {
@@ -16,12 +17,13 @@ struct WeatherTool {
 impl agentix::Tool for WeatherTool {
     /// Get current weather for a city.
     /// city: city name
-    async fn get_weather(&self, city: String) -> serde_json::Value {
+    async fn get_weather(&self, city: String) -> Result<Value, String> {
         let url = format!("https://wttr.in/{}?format=3", city);
-        let text = self.client.get(&url).send().await
-            .and_then(|r| futures::executor::block_on(r.text()))
-            .unwrap_or_else(|e| e.to_string());
-        json!({ "city": city, "weather": text })
+        let resp = self.client.get(&url).send().await
+            .map_err(|e| e.to_string())?;
+        let text = resp.text().await
+            .map_err(|e| e.to_string())?;
+        Ok(json!({ "city": city, "weather": text }))
     }
 }
 
@@ -31,20 +33,25 @@ async fn main() {
 
     let agent = agentix::deepseek(token)
         .system_prompt("You are a helpful assistant.")
-        .tool(WeatherTool { client: Client::new() });
+        .tool(WeatherTool { client: Client::new() }).await;
 
-    let mut rx = agent.subscribe();
-    agent.send("Check the weather for Beijing and Shanghai.").await;
+    // Create an input stream
+    let input = futures::stream::iter(vec![
+        AgentInput::User(vec!["Check the weather for Beijing and Shanghai.".into()])
+    ]).boxed();
 
-    while let Ok(msg) = rx.recv().await {
-        match msg {
-            Msg::TurnStart => println!("--- turn start ---"),
-            Msg::Token(t)  => { print!("{t}"); std::io::stdout().flush().ok(); }
-            Msg::Reasoning(r) => { print!("\x1b[2m{r}\x1b[0m"); std::io::stdout().flush().ok(); }
-            Msg::ToolCall { name, args, .. } => println!("\n[calling {name}({args})]"),
-            Msg::ToolResult { name, result, .. } => println!("[{name}] → {result}"),
-            Msg::Done  => break,
-            Msg::Error(e) => { eprintln!("Error: {e}"); break; }
+    // Run the agent and get the response stream
+    let mut response = agent.run(input);
+
+    while let Some(event) = response.next().await {
+        match event {
+            AgentEvent::Token(t)  => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::Reasoning(r) => { print!("\x1b[2m{r}\x1b[0m"); std::io::stdout().flush().ok(); }
+            AgentEvent::ToolCallChunk(_) => {}
+            AgentEvent::ToolCall(tc) => println!("\n[calling {}({})]", tc.name, tc.arguments),
+            AgentEvent::ToolResult { name, result, .. } => println!("[{name}] → {result}"),
+            AgentEvent::Done  => break,
+            AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
             _ => {}
         }
     }

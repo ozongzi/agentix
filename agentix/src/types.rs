@@ -3,8 +3,6 @@
 //! These types are kept separate to avoid circular dependencies between
 //! `raw/` (provider wire formats) and `agent/` (agent logic).
 
-use serde_json::Value;
-
 // ── Usage & Accounting ────────────────────────────────────────────────────────
 
 /// Token usage statistics for a single request or an entire session.
@@ -26,14 +24,9 @@ impl std::ops::AddAssign for UsageStats {
     }
 }
 
-// ── Agent event types ─────────────────────────────────────────────────────────
+// ── Internal provider events ──────────────────────────────────────────────────
 
 /// A tool call fragment emitted during a streaming turn.
-///
-/// In streaming mode multiple `ToolCallChunk`s are emitted per tool call:
-/// the first has an empty `delta` (name is known, no args yet); subsequent
-/// chunks carry incremental argument JSON. In non-streaming mode a single
-/// chunk is emitted with the complete argument JSON in `delta`.
 #[derive(Debug, Clone)]
 pub struct ToolCallChunk {
     pub id: String,
@@ -42,30 +35,14 @@ pub struct ToolCallChunk {
     pub index: u32,
 }
 
-/// The result of a completed tool invocation.
+/// Raw event fragments produced by individual provider implementations.
+/// These are mapped to public events in `src/msg.rs`.
 #[derive(Debug, Clone)]
-pub struct ToolCallResult {
-    pub id: String,
-    pub name: String,
-    pub args: String,
-    pub result: Value,
-}
-
-/// Events emitted by [`AgentStream`][crate::agent::AgentStream] and [`Handle`][crate::agent::handle::Handle].
-#[derive(Debug, Clone)]
-pub enum AgentEvent {
-    /// A text fragment from the assistant.
+pub enum ProtocolEvent {
     Token(String),
-    /// Reasoning/thinking content (e.g. deepseek-reasoner, claude extended thinking).
-    ReasoningToken(String),
-    /// A tool call fragment. Accumulate `delta` values by `id` to reconstruct args.
-    ToolCall(ToolCallChunk),
-    /// A tool has finished executing.
-    ToolResult(ToolCallResult),
-    /// Token usage statistics for the current turn.
+    Reasoning(String),
+    ToolCallChunk(ToolCallChunk),
     Usage(UsageStats),
-    /// The current generation turn has finished (emitted by [`Handle`] only).
-    Done,
 }
 
 // ── Streaming accumulator ─────────────────────────────────────────────────────
@@ -79,8 +56,6 @@ pub struct PartialToolCall {
 }
 
 /// Provider-agnostic streaming state, held inside `StreamingData<P>`.
-/// Separated so `ProviderProtocol::parse_chunk` can mutate it without
-/// knowing about `Agent<P>`.
 pub struct StreamBufs {
     pub content_buf: String,
     pub reasoning_buf: String,
@@ -119,55 +94,42 @@ pub trait ProviderProtocol: Send + Sync + Unpin + 'static {
     /// Convert a provider-agnostic `AgentRequest` into the provider's wire format.
     fn build_raw(req: crate::request::Request) -> Self::RawRequest;
 
-    /// Parse a complete response into agent events and raw tool calls.
-    ///
-    /// Returns `(events, tool_calls)` where `tool_calls` uses the unified
-    /// `request::ToolCall` type so the executor can dispatch them uniformly.
-    fn parse_response(raw: Self::RawResponse) -> (Vec<AgentEvent>, Vec<crate::request::ToolCall>);
+    /// Parse a complete response into internal protocol events and tool calls.
+    fn parse_response(raw: Self::RawResponse) -> (Vec<ProtocolEvent>, Vec<crate::request::ToolCall>);
 
     /// Apply a single streaming chunk to the accumulator buffers and return
     /// any events to yield immediately.
-    fn parse_chunk(chunk: Self::RawChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent>;
+    fn parse_chunk(chunk: Self::RawChunk, bufs: &mut StreamBufs) -> Vec<ProtocolEvent>;
 
     /// Assemble complete tool calls from the accumulated buffers and return them.
     fn finalize_stream(bufs: &mut StreamBufs) -> Vec<crate::request::ToolCall>;
 
     /// Return the URL suffix for this provider's completions endpoint.
-    /// Defaults to "/chat/completions" (OpenAI standard).
     fn url_suffix(model: &str, streaming: bool) -> String {
         let _ = (model, streaming);
         "/chat/completions".to_string()
     }
 
-    /// Extra HTTP headers sent with every request (e.g. `anthropic-version`).
-    /// Returns a static slice of (name, value) pairs.
+    /// Extra HTTP headers sent with every request.
     fn extra_headers() -> &'static [(&'static str, &'static str)] {
         &[]
     }
 
-    /// If `Some(name)`, the token is sent as the given header instead of
-    /// `Authorization: Bearer`. Used by Anthropic (`x-api-key`).
+    /// If `Some(name)`, the token is sent as the given header.
     fn auth_header_name() -> Option<&'static str> {
         None
     }
 
-    /// If `true`, the token is appended as `?key=TOKEN` query parameter
-    /// instead of an `Authorization` header. Used by Gemini.
+    /// If `true`, the token is appended as `?key=TOKEN`.
     fn uses_query_key_auth() -> bool {
         false
     }
 
-    /// Provider-specific history preparation applied before building each request.
-    /// Default is a no-op. DeepSeek overrides this to enforce reasoning_content rules.
+    /// Provider-specific history preparation.
     fn prepare_history(messages: Vec<crate::request::Message>) -> Vec<crate::request::Message> {
         messages
     }
 
-    /// Default base URL for this provider. Used by `ApiClient::new()` so that
-    /// provider-specific agents get the right endpoint without requiring an
-    /// explicit `.with_base_url()` call.
-    ///
-    /// Every built-in provider overrides this. Custom providers **must** override
-    /// it too — there is no sensible default that applies to all providers.
+    /// Default base URL for this provider.
     fn default_base_url() -> &'static str;
 }

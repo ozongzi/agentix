@@ -6,33 +6,33 @@ use serde_json::Value;
 
 // ── SharedContext ─────────────────────────────────────────────────────────────
 
-/// A thread-safe, clone-cheap key/value store shared across graph nodes.
+/// A thread-safe, clone-cheap key/value store shared across nodes.
 ///
-/// Nodes can read and write typed values by key.  [`PromptTemplate`] reads
-/// context entries as template variables when a key is not found in its own
-/// `.var()` map.
+/// Nodes can read and write typed values by key.  [`PromptNode`] reads
+/// context entries as template variables.
 ///
 /// # Example
 /// ```no_run
-/// use agentix::{Graph, Node, PromptTemplate, SharedContext};
+/// use agentix::{Node, PromptNode, SharedContext};
+/// use futures::StreamExt;
 ///
 /// # #[tokio::main] async fn main() {
 /// let ctx = SharedContext::new();
 /// ctx.set("lang", "Japanese");
 /// ctx.set("style", "formal");
 ///
-/// let prompt = PromptTemplate::new("Translate {input} to {lang} in a {style} tone.")
+/// let prompt = PromptNode::new("Translate {input} to {lang} in a {style} tone.")
 ///     .context(ctx.clone());
 ///
-/// let agent = agentix::deepseek(std::env::var("KEY").unwrap());
-/// Graph::new().edge(&prompt, &agent);
+/// let input = futures::stream::iter(vec!["Hello world".to_string()]).boxed();
+/// let mut output = prompt.run(input);
 ///
 /// // Later, hot-swap the target language without rebuilding the graph:
 /// ctx.set("lang", "Spanish");
 /// # }
 /// ```
 ///
-/// [`PromptTemplate`]: crate::PromptTemplate
+/// [`PromptNode`]: crate::PromptNode
 #[derive(Clone, Default)]
 pub struct SharedContext(Arc<RwLock<HashMap<String, Value>>>);
 

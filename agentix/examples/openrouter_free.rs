@@ -5,8 +5,10 @@
 //! Run with:
 //!   OPENROUTER_API_KEY=sk-or-... cargo run --example openrouter_free
 
-use agentix::Msg;
+use agentix::{AgentEvent, AgentInput, Node};
+use futures::StreamExt;
 use std::io::{self, Write};
+use tokio::sync::mpsc;
 
 const BASE_URL: &str = "https://openrouter.ai/api/v1";
 const MODEL:    &str = "openrouter/free";
@@ -22,6 +24,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Chatting with {MODEL} via OpenRouter. Ctrl+C to exit.\n");
 
+    let (tx, rx) = mpsc::channel(64);
+    let mut response = agent.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
+
     let mut line = String::new();
     loop {
         print!("> ");
@@ -31,18 +36,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let prompt = line.trim();
         if prompt.is_empty() { continue; }
 
-        let mut rx = agent.subscribe();
-        agent.send(prompt).await;
+        tx.send(AgentInput::User(vec![prompt.into()])).await?;
 
         loop {
-            match rx.recv().await {
-                Ok(Msg::Token(t))     => { print!("{t}"); io::stdout().flush().ok(); }
-                Ok(Msg::Reasoning(r)) => { print!("\x1b[2m{r}\x1b[0m"); io::stdout().flush().ok(); }
-                Ok(Msg::ToolCall { name, .. })     => println!("\n[calling {name}]"),
-                Ok(Msg::ToolResult { name, result, .. }) => println!("[{name}] -> {result}"),
-                Ok(Msg::Done)  => break,
-                Ok(Msg::Error(e)) => { eprintln!("\nError: {e}"); break; }
-                Err(_) | Ok(_) => break,
+            match response.next().await {
+                Some(AgentEvent::Token(t))     => { print!("{t}"); io::stdout().flush().ok(); }
+                Some(AgentEvent::Reasoning(r)) => { print!("\x1b[2m{r}\x1b[0m"); io::stdout().flush().ok(); }
+                Some(AgentEvent::ToolCall(tc))     => println!("\n[calling {}]", tc.name),
+                Some(AgentEvent::ToolResult { name, result, .. }) => println!("[{name}] -> {result}"),
+                Some(AgentEvent::Done)  => break,
+                Some(AgentEvent::Error(e)) => { eprintln!("\nError: {e}"); break; }
+                None => break,
+                _ => {}
             }
         }
         println!("\n");

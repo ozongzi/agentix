@@ -1,22 +1,15 @@
 //! Example: queuing a follow-up message while the agent is still running a tool,
-//! and aborting a turn in progress with `agent.abort()`.
-//!
-//! Two scenarios are shown:
-//!
-//! **Scenario A — follow-up queued mid-tool**: the agent starts a slow tool;
-//! a background task calls `agent.send()` after 500 ms.  The follow-up is
-//! appended to the inbox and processed after the current tool round finishes.
-//!
-//! **Scenario B — abort**: `agent.abort()` cancels the current turn; the
-//! agent emits `Msg::Done` and is ready for the next message immediately.
+//! and aborting a turn in progress via AgentInput::Abort.
 //!
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example interrupt
 
-use agentix::{Msg, tool};
-use serde_json::json;
+use agentix::{AgentEvent, AgentInput, Node, tool};
+use serde_json::{json, Value};
 use std::io::Write;
 use tokio::time::{Duration, sleep};
+use tokio::sync::mpsc;
+use futures::StreamExt;
 
 struct SlowCounter;
 
@@ -24,25 +17,12 @@ struct SlowCounter;
 impl agentix::Tool for SlowCounter {
     /// Count from 1 to n with a 200 ms delay per step.
     /// n: how high to count
-    async fn count_to(&self, n: u32) -> serde_json::Value {
+    async fn count_to(&self, n: u32) -> Result<Value, String> {
         for i in 1..=n {
             sleep(Duration::from_millis(200)).await;
             eprintln!("  [tool] {i}/{n}");
         }
-        json!({ "final_count": n })
-    }
-}
-
-async fn drain(rx: &mut tokio::sync::broadcast::Receiver<Msg>) {
-    loop {
-        match rx.recv().await {
-            Ok(Msg::Token(t))     => { print!("{t}"); std::io::stdout().flush().ok(); }
-            Ok(Msg::ToolCall { name, .. })     => println!("\n[calling {name}]"),
-            Ok(Msg::ToolResult { name, result, .. }) => println!("[{name}] -> {result}"),
-            Ok(Msg::Done)  => { println!(); break; }
-            Ok(Msg::Error(e)) => { eprintln!("Error: {e}"); break; }
-            Err(_) | Ok(_) => break,
-        }
+        Ok(json!({ "final_count": n }))
     }
 }
 
@@ -50,7 +30,7 @@ async fn drain(rx: &mut tokio::sync::broadcast::Receiver<Msg>) {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set");
 
-    // ── Scenario A: follow-up queued while tool is running ────────────────────
+    // ── Scenario A: follow-up message queued mid-tool ────────────────────
     println!("=== Scenario A: follow-up message queued mid-tool ===\n");
 
     let agent = agentix::deepseek(&token)
@@ -59,43 +39,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              When asked to count, use count_to. \
              Always acknowledge follow-up messages.",
         )
-        .tool(SlowCounter);
+        .tool(SlowCounter).await;
 
-    let mut rx = agent.subscribe();
-    agent.send("Count to 5 using count_to.").await;
+    let (tx, rx) = mpsc::channel(64);
+    let mut response = agent.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
+
+    tx.send(AgentInput::User(vec!["Count to 5 using count_to.".into()])).await?;
 
     // Queue a follow-up 500 ms later — while the tool is still running.
-    let agent2 = agent.clone();
+    let tx2 = tx.clone();
     tokio::spawn(async move {
         sleep(Duration::from_millis(500)).await;
         println!("\n[queuing follow-up]\n");
-        agent2.send("Also tell me the square of that number.").await;
+        tx2.send(AgentInput::User(vec!["Also tell me the square of that number.".into()])).await.ok();
     });
 
-    // First turn (count_to)
-    drain(&mut rx).await;
-    // Second turn (square — queued follow-up)
-    drain(&mut rx).await;
+    // Handle all events
+    let mut turns_done = 0;
+    while let Some(event) = response.next().await {
+        match event {
+            AgentEvent::Token(t)  => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::ToolCall(tc) => println!("\n[calling {}]", tc.name),
+            AgentEvent::ToolResult { name, result, .. } => println!("[{name}] -> {result}"),
+            AgentEvent::Done  => {
+                println!("\n--- turn done ---");
+                turns_done += 1;
+                if turns_done >= 2 { break; }
+            }
+            AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
+            _ => {}
+        }
+    }
 
     // ── Scenario B: abort ────────────────────────────────────────────────────
     println!("\n=== Scenario B: abort ===\n");
 
     let agent = agentix::deepseek(token)
         .system_prompt("You are a helpful assistant.")
-        .tool(SlowCounter);
+        .tool(SlowCounter).await;
 
-    let mut rx = agent.subscribe();
-    agent.send("Count to 10 using count_to.").await;
+    let (tx, rx) = mpsc::channel(64);
+    let mut response = agent.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
+
+    tx.send(AgentInput::User(vec!["Count to 10 using count_to.".into()])).await?;
 
     // Abort after the tool starts but before it finishes.
-    let agent3 = agent.clone();
+    let tx3 = tx.clone();
     tokio::spawn(async move {
         sleep(Duration::from_millis(300)).await;
         println!("\n[aborting turn]\n");
-        agent3.abort().await;
+        tx3.send(AgentInput::Abort).await.ok();
     });
 
-    drain(&mut rx).await;
+    while let Some(event) = response.next().await {
+        match event {
+            AgentEvent::Token(t)  => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::ToolCall(tc) => println!("\n[calling {}]", tc.name),
+            AgentEvent::Done  => {
+                println!("\n--- turn aborted ---");
+                break;
+            }
+            _ => {}
+        }
+    }
     println!("Agent ready for next message after abort.");
 
     Ok(())

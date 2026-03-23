@@ -1,19 +1,48 @@
-//! Multi-agent pipeline using Graph, PromptTemplate, OutputParser, and middleware.
+//! Multi-agent pipeline using stream chaining.
 //!
 //! Pipeline:
-//!   prompt_template  →  scorer_agent  →  output_parser
+//!   input_stream  →  prompt_node  →  scorer_agent  →  output_parser
 //!
-//! 1. `PromptTemplate` wraps raw input in a scoring instruction.
+//! 1. `PromptNode` wraps raw input in a scoring instruction.
 //! 2. `scorer_agent` (DeepSeek) responds with JSON: {"score": N}.
-//! 3. `OutputParser` extracts the numeric score.
-//! 4. A middleware logs every message crossing each edge.
+//! 3. `OutputParserNode` extracts the numeric score.
 //!
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example graph
 
-use agentix::{Graph, Msg, Node, OutputParser, PromptTemplate};
+use agentix::{AgentEvent, Node, PromptNode};
 use futures::StreamExt;
-use std::io::Write;
+use futures::stream::BoxStream;
+use tokio::sync::mpsc;
+
+// ── Custom Output Parser Node ────────────────────────────────────────────────
+
+struct OutputParserNode;
+
+impl Node for OutputParserNode {
+    type Input = AgentEvent;
+    type Output = String;
+
+    fn run(self, input: BoxStream<'static, Self::Input>) -> BoxStream<'static, Self::Output> {
+        let mut full_text = String::new();
+        async_stream::stream! {
+            for await event in input {
+                match event {
+                    AgentEvent::Token(t) => full_text.push_str(&t),
+                    AgentEvent::Done => {
+                        let score = serde_json::from_str::<serde_json::Value>(full_text.trim())
+                            .ok()
+                            .and_then(|v| v["score"].as_f64().map(|n| format!("{n:.1}")))
+                            .unwrap_or_else(|| format!("(could not parse: {full_text})"));
+                        yield score;
+                        full_text.clear();
+                    }
+                    _ => {}
+                }
+            }
+        }.boxed()
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -21,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Nodes ─────────────────────────────────────────────────────────────────
 
-    let prompt = PromptTemplate::new(
+    let prompt_node = PromptNode::new(
         "Rate the following product review on a scale of 0 to 10. \
          Respond with ONLY valid JSON in this exact format: {{\"score\": <number>}}\n\
          Review: {input}",
@@ -32,27 +61,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .system_prompt("You are a sentiment scorer. Respond only with JSON: {\"score\": N}.")
         .max_tokens(64);
 
-    let parser = OutputParser::new(|s| {
-        serde_json::from_str::<serde_json::Value>(s.trim())
-            .ok()
-            .and_then(|v| v["score"].as_f64().map(|n| format!("{n:.1}")))
-            .unwrap_or_else(|| format!("(could not parse: {s})"))
-    });
+    let parser_node = OutputParserNode;
 
     // ── Wire up ───────────────────────────────────────────────────────────────
 
-    Graph::new()
-        .middleware(|msg| {
-            if let Msg::User(ref parts) = msg {
-                let text: String = parts.iter()
-                    .filter_map(|p| if let agentix::UserContent::Text(t) = p { Some(t.as_str()) } else { None })
-                    .collect::<Vec<_>>().join(" ");
-                eprintln!("[edge →] {}", &text[..text.len().min(80)]);
-            }
-            Some(msg)
-        })
-        .edge(&prompt, &scorer)
-        .edge(&scorer, &parser);
+    let (tx, rx) = mpsc::channel::<String>(64);
+    
+    // Chain: rx (String) -> prompt_node -> AgentInput -> scorer -> AgentEvent -> parser_node -> String
+    let prompt_stream = prompt_node.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
+    let agent_stream = scorer.run(prompt_stream);
+    let mut final_output = parser_node.run(agent_stream);
 
     // ── Run ───────────────────────────────────────────────────────────────────
 
@@ -64,38 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for review in reviews {
         println!("Review: \"{review}\"");
+        tx.send(review.to_string()).await?;
 
-        // Subscribe before sending so we don't miss any events.
-        let mut stream = Box::pin(parser.output().subscribe_assembled());
-        prompt.input().send(Msg::User(vec![review.into()])).await?;
-
-        // Drain the parser's assembled output.
-        while let Some(msg) = stream.next().await {
-            match msg {
-                Msg::User(parts) => {
-                    let score = parts.into_iter()
-                        .filter_map(|p| if let agentix::UserContent::Text(t) = p { Some(t) } else { None })
-                        .collect::<String>();
-                    println!("Score: {score}\n");
-                    break;
-                }
-                Msg::Done => break,
-                _ => {}
-            }
-        }
-    }
-
-    // ── Raw streaming view from scorer ────────────────────────────────────────
-    println!("--- Watching scorer raw output for one more review ---\n");
-
-    let mut rx = scorer.subscribe();
-    prompt.input().send(Msg::User(vec!["Exceptional! Exceeded all expectations.".into()])).await?;
-
-    while let Ok(msg) = rx.recv().await {
-        match msg {
-            Msg::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
-            Msg::Done     => { println!(); break; }
-            _             => {}
+        if let Some(score) = final_output.next().await {
+            println!("Score: {score}\n");
         }
     }
 

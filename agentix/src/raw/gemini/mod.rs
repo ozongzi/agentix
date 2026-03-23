@@ -329,7 +329,7 @@ pub type StreamChunk = Response;
 
 use crate::markers::Gemini;
 use crate::request::ToolCall as AgentToolCall;
-use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
+use crate::types::{ProtocolEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 
 impl ProviderProtocol for Gemini {
     type RawRequest = Request;
@@ -343,10 +343,10 @@ impl ProviderProtocol for Gemini {
         "https://generativelanguage.googleapis.com/v1beta"
     }
 
-    fn parse_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
+    fn parse_response(raw: Response) -> (Vec<ProtocolEvent>, Vec<AgentToolCall>) {
         let mut events = Vec::new();
         if let Some(u) = raw.usage_metadata {
-            events.push(AgentEvent::Usage(u.into()));
+            events.push(ProtocolEvent::Usage(u.into()));
         }
 
         let candidates = match raw.candidates {
@@ -361,7 +361,7 @@ impl ProviderProtocol for Gemini {
         let mut tool_calls = Vec::new();
         for part in candidate.content.parts {
             if let Some(t) = part.text.filter(|s| !s.is_empty()) {
-                events.push(AgentEvent::Token(t));
+                events.push(ProtocolEvent::Token(t));
             }
             if let Some(fc) = part.function_call {
                 tool_calls.push(AgentToolCall {
@@ -374,10 +374,10 @@ impl ProviderProtocol for Gemini {
         (events, tool_calls)
     }
 
-    fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
+    fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<ProtocolEvent> {
         let mut events = Vec::new();
         if let Some(u) = chunk.usage_metadata {
-            events.push(AgentEvent::Usage(u.into()));
+            events.push(ProtocolEvent::Usage(u.into()));
         }
 
         let candidates = match chunk.candidates {
@@ -392,18 +392,18 @@ impl ProviderProtocol for Gemini {
         for part in candidate.content.parts {
             if let Some(t) = part.text.filter(|s| !s.is_empty()) {
                 bufs.content_buf.push_str(&t);
-                events.push(AgentEvent::Token(t));
+                events.push(ProtocolEvent::Token(t));
             }
             if let Some(fc) = part.function_call {
                 let idx = bufs.tool_call_bufs.len();
                 let args = serde_json::to_string(&fc.args).unwrap_or_default();
-                events.push(AgentEvent::ToolCall(ToolCallChunk {
+                events.push(ProtocolEvent::ToolCallChunk(ToolCallChunk {
                     id: fc.name.clone(),
                     name: fc.name.clone(),
                     delta: String::new(),
                     index: idx as u32,
                 }));
-                events.push(AgentEvent::ToolCall(ToolCallChunk {
+                events.push(ProtocolEvent::ToolCallChunk(ToolCallChunk {
                     id: fc.name.clone(),
                     name: fc.name.clone(),
                     delta: args.clone(),

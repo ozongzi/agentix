@@ -319,7 +319,7 @@ pub struct StreamError {
 
 use crate::markers::Anthropic;
 use crate::request::ToolCall as AgentToolCall;
-use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
+use crate::types::{ProtocolEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 
 impl ProviderProtocol for Anthropic {
     type RawRequest = Request;
@@ -333,19 +333,19 @@ impl ProviderProtocol for Anthropic {
         "https://api.anthropic.com"
     }
 
-    fn parse_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
+    fn parse_response(raw: Response) -> (Vec<ProtocolEvent>, Vec<AgentToolCall>) {
         let mut events = Vec::new();
         if let Some(u) = raw.usage {
-            events.push(AgentEvent::Usage(u.into()));
+            events.push(ProtocolEvent::Usage(u.into()));
         }
         let mut tool_calls = Vec::new();
         for block in raw.content {
             match block {
                 ResponseBlock::Thinking { thinking } if !thinking.is_empty() => {
-                    events.push(AgentEvent::ReasoningToken(thinking));
+                    events.push(ProtocolEvent::Reasoning(thinking));
                 }
                 ResponseBlock::Text { text } if !text.is_empty() => {
-                    events.push(AgentEvent::Token(text));
+                    events.push(ProtocolEvent::Token(text));
                 }
                 ResponseBlock::ToolUse { id, name, input } => {
                     tool_calls.push(AgentToolCall {
@@ -360,17 +360,17 @@ impl ProviderProtocol for Anthropic {
         (events, tool_calls)
     }
 
-    fn parse_chunk(chunk: StreamEvent, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
+    fn parse_chunk(chunk: StreamEvent, bufs: &mut StreamBufs) -> Vec<ProtocolEvent> {
         match chunk {
             StreamEvent::MessageStart { message } => {
                 if let Some(u) = message.usage {
-                    return vec![AgentEvent::Usage(u.into())];
+                    return vec![ProtocolEvent::Usage(u.into())];
                 }
                 vec![]
             }
             StreamEvent::MessageDelta { usage, .. } => {
                 if let Some(u) = usage {
-                    return vec![AgentEvent::Usage(u.into())];
+                    return vec![ProtocolEvent::Usage(u.into())];
                 }
                 vec![]
             }
@@ -389,7 +389,7 @@ impl ProviderProtocol for Anthropic {
                             name: name.clone(),
                             arguments: String::new(),
                         });
-                        vec![AgentEvent::ToolCall(ToolCallChunk {
+                        vec![ProtocolEvent::ToolCallChunk(ToolCallChunk {
                             id,
                             name,
                             delta: String::new(),
@@ -398,11 +398,11 @@ impl ProviderProtocol for Anthropic {
                     }
                     ContentBlockStart::Text { text } if !text.is_empty() => {
                         bufs.content_buf.push_str(&text);
-                        vec![AgentEvent::Token(text)]
+                        vec![ProtocolEvent::Token(text)]
                     }
                     ContentBlockStart::Thinking { thinking } if !thinking.is_empty() => {
                         bufs.reasoning_buf.push_str(&thinking);
-                        vec![AgentEvent::ReasoningToken(thinking)]
+                        vec![ProtocolEvent::Reasoning(thinking)]
                     }
                     _ => vec![],
                 }
@@ -410,17 +410,17 @@ impl ProviderProtocol for Anthropic {
             StreamEvent::ContentBlockDelta { index, delta } => match delta {
                 ContentBlockDelta::TextDelta { text } if !text.is_empty() => {
                     bufs.content_buf.push_str(&text);
-                    vec![AgentEvent::Token(text)]
+                    vec![ProtocolEvent::Token(text)]
                 }
                 ContentBlockDelta::ThinkingDelta { thinking } if !thinking.is_empty() => {
                     bufs.reasoning_buf.push_str(&thinking);
-                    vec![AgentEvent::ReasoningToken(thinking)]
+                    vec![ProtocolEvent::Reasoning(thinking)]
                 }
                 ContentBlockDelta::InputJsonDelta { partial_json } if !partial_json.is_empty() => {
                     let idx = index as usize;
                     if let Some(Some(partial)) = bufs.tool_call_bufs.get_mut(idx) {
                         partial.arguments.push_str(&partial_json);
-                        vec![AgentEvent::ToolCall(ToolCallChunk {
+                        vec![ProtocolEvent::ToolCallChunk(ToolCallChunk {
                             id: partial.id.clone(),
                             name: partial.name.clone(),
                             delta: partial_json,

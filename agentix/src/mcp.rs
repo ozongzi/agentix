@@ -1,17 +1,17 @@
-//! MCP (Model Context Protocol) client support for `ds-api`.
+//! MCP (Model Context Protocol) client support for `agentix`.
 //!
 //! Enable with the `mcp` feature flag:
 //!
 //! ```toml
 //! [dependencies]
-//! ds-api = { version = "0.5", features = ["mcp"] }
+//! agentix = { version = "0.4", features = ["mcp"] }
 //! ```
 //!
 //! # Usage
 //!
 //! [`McpTool`] wraps an MCP server — either a local process (stdio) or a remote
 //! HTTP endpoint — and implements [`Tool`] so it can be registered
-//! directly with [`DeepSeekAgent::with_tool`][crate::DeepSeekAgent::with_tool].
+//! directly with [`Agent::tool`][crate::Agent::tool].
 //!
 //! Every tool the MCP server advertises is forwarded to the agent automatically;
 //! you do not need to know their names or schemas ahead of time.
@@ -23,11 +23,11 @@
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! use agentix::{DeepSeekAgent, McpTool};
+//! use agentix::Agent;
+//! use agentix::McpTool;
 //!
-//! let agent = DeepSeekAgent::new("sk-...")
-//!     .with_tool(McpTool::stdio("npx", &["-y", "@playwright/mcp"]).await?)
-//!     .with_tool(McpTool::stdio("uvx", &["mcp-server-git"]).await?);
+//! let agent = agentix::openai("sk-...")
+//!     .tool(McpTool::stdio("npx", &["-y", "@playwright/mcp"]).await?);
 //! # Ok(()) }
 //! ```
 //!
@@ -37,10 +37,11 @@
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! use agentix::{DeepSeekAgent, McpTool};
+//! use agentix::Agent;
+//! use agentix::McpTool;
 //!
-//! let agent = DeepSeekAgent::new("sk-...")
-//!     .with_tool(McpTool::http("https://mcp.example.com/").await?);
+//! let agent = agentix::openai("sk-...")
+//!     .tool(McpTool::http("https://mcp.example.com/").await?);
 //! # Ok(()) }
 //! ```
 
@@ -81,7 +82,7 @@ pub enum McpError {
 // ── McpTool ───────────────────────────────────────────────────────────────────
 
 /// An MCP server exposed as a [`Tool`] that can be registered with
-/// [`DeepseekAgent`][crate::DeepseekAgent].
+/// [`Agent`][crate::Agent].
 ///
 /// The tool list is fetched once at construction time and cached for the
 /// lifetime of the struct.  All calls are forwarded to the underlying MCP
@@ -260,18 +261,6 @@ impl McpTool {
     /// Set the maximum character count for the JSON output string.
     ///
     /// When the output exceeds this limit, it will be truncated with an ellipsis.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use agentix::McpTool;
-    ///
-    /// let tool = McpTool::stdio("npx", &["-y", "@playwright/mcp"])
-    ///     .await?
-    ///     .with_max_output_chars(10000);
-    /// # Ok(()) }
-    /// ```
     pub fn with_max_output_chars(mut self, max: usize) -> Self {
         self.max_output_chars = Some(max);
         self
@@ -281,36 +270,12 @@ impl McpTool {
     ///
     /// When the output contains more items than this limit, only the first N items
     /// will be returned.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use agentix::McpTool;
-    ///
-    /// let tool = McpTool::http("https://mcp.example.com/")
-    ///     .await?
-    ///     .with_max_content_items(50);
-    /// # Ok(()) }
-    /// ```
     pub fn with_max_content_items(mut self, max: usize) -> Self {
         self.max_content_items = Some(max);
         self
     }
 
     /// Set both output limits at once.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use agentix::McpTool;
-    ///
-    /// let tool = McpTool::stdio("npx", &["-y", "@playwright/mcp"])
-    ///     .await?
-    ///     .with_output_limits(10000, 50);
-    /// # Ok(()) }
-    /// ```
     pub fn with_output_limits(mut self, max_chars: usize, max_items: usize) -> Self {
         self.max_output_chars = Some(max_chars);
         self.max_content_items = Some(max_items);
@@ -323,20 +288,6 @@ impl McpTool {
     /// - Context window overflow (2MB+ responses)
     /// - Conversation crashes before summarization
     /// - Memory issues with large payloads
-    ///
-    /// Only use this for trusted tools where you need the full output.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// use agentix::McpTool;
-    ///
-    /// let tool = McpTool::http("https://mcp-trusted.example.com/")
-    ///     .await?
-    ///     .without_output_limits();
-    /// # Ok(()) }
-    /// ```
     pub fn without_output_limits(mut self) -> Self {
         self.max_output_chars = None;
         self.max_content_items = None;
@@ -369,7 +320,7 @@ impl McpTool {
     }
 
     /// Call `tools/list` (paginating automatically) and convert the MCP tool
-    /// definitions into [`RawTool`]s understood by `ds-api`.
+    /// definitions into [`RawTool`]s understood by `agentix`.
     async fn fetch_tools(peer: &Peer<RoleClient>) -> Result<Vec<RawTool>, McpError> {
         let mcp_tools = peer
             .list_all_tools()
@@ -379,10 +330,6 @@ impl McpTool {
         let tools = mcp_tools
             .into_iter()
             .map(|mcp_tool| {
-                // `input_schema` is an `Arc<JsonObject>` (alias for
-                // `serde_json::Map<String, Value>`).  Wrap it in a
-                // `Value::Object` so we can pass it as the `parameters` field
-                // that the DeepSeek API expects (a plain JSON Schema object).
                 let parameters = Value::Object(mcp_tool.input_schema.as_ref().clone());
 
                 RawTool {
@@ -434,15 +381,12 @@ impl Tool for McpTool {
 
         match result {
             Ok(result) => {
-                // MCP returns a list of content items; flatten them into a
-                // single JSON value that the model can read.
                 let mut contents: Vec<Value> = result
                     .content
                     .into_iter()
                     .filter_map(|item| serde_json::to_value(item).ok())
                     .collect();
 
-                // Apply max_content_items limit if set
                 if let Some(max_items) = self.max_content_items {
                     if contents.len() > max_items {
                         contents.truncate(max_items);
@@ -455,14 +399,11 @@ impl Tool for McpTool {
                     _ => serde_json::json!({ "content": contents }),
                 };
 
-                // Apply max_output_chars limit if set
                 if let Some(max_chars) = self.max_output_chars {
                     let json_string = serde_json::to_string(&result_value).unwrap_or_default();
                     if json_string.len() > max_chars {
                         let mut limit = max_chars.saturating_sub(40);
-
                         limit = json_string.floor_char_boundary(limit);
-
                         let truncated = &json_string[..limit];
                         return serde_json::Value::String(format!(
                             "{}...<truncated {} chars>",

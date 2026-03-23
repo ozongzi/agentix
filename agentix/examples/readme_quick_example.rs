@@ -3,7 +3,8 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example readme_quick_example
 
-use agentix::Msg;
+use agentix::{AgentInput, AgentEvent, Node};
+use futures::StreamExt;
 use std::io::Write;
 
 #[tokio::main]
@@ -12,14 +13,19 @@ async fn main() {
         .system_prompt("You are a helpful assistant.")
         .max_tokens(1024);
 
-    let mut rx = agent.subscribe();
-    agent.send("What is the capital of France?").await;
+    // Create an input stream
+    let input = futures::stream::iter(vec![
+        AgentInput::User(vec!["What is the capital of France?".into()])
+    ]).boxed();
 
-    while let Ok(msg) = rx.recv().await {
-        match msg {
-            Msg::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
-            Msg::Done     => break,
-            _             => {}
+    // Run the agent and get the response stream
+    let mut response = agent.run(input);
+
+    while let Some(event) = response.next().await {
+        match event {
+            AgentEvent::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::Done     => break,
+            _                    => {}
         }
     }
     println!();

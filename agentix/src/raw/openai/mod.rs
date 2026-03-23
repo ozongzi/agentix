@@ -53,7 +53,7 @@ pub enum UserMessageContent {
     Parts(Vec<ContentPart>),
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum ContentPart {
@@ -61,7 +61,7 @@ pub enum ContentPart {
     ImageUrl { image_url: ImageUrl },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ImageUrl {
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +93,7 @@ impl From<crate::request::Request> for Request {
                             .into_iter()
                             .map(|tc| ResponseToolCall {
                                 id: tc.id,
+                                r#type: "function".to_string(),
                                 function: ResponseFunctionCall {
                                     name: tc.name,
                                     arguments: tc.arguments,
@@ -126,15 +127,6 @@ impl From<crate::request::Request> for Request {
 
 fn user_content_from_parts(parts: Vec<crate::request::UserContent>) -> UserMessageContent {
     use crate::request::{ImageData, UserContent};
-    if parts.len() == 1
-        && matches!(&parts[0], UserContent::Text(_))
-        && !matches!(&parts[0], UserContent::Image(_))
-    {
-        if let UserContent::Text(t) = parts.into_iter().next().unwrap() {
-            return UserMessageContent::Text(t);
-        }
-        unreachable!()
-    }
     let blocks = parts
         .into_iter()
         .map(|p| match p {
@@ -149,7 +141,13 @@ fn user_content_from_parts(parts: Vec<crate::request::UserContent>) -> UserMessa
                 }
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+
+    if blocks.len() == 1 && matches!(blocks[0], ContentPart::Text { .. }) {
+        if let Some(ContentPart::Text { text }) = blocks.clone().into_iter().next() {
+            return UserMessageContent::Text(text);
+        }
+    }
     UserMessageContent::Parts(blocks)
 }
 
@@ -183,6 +181,7 @@ pub struct ResponseMessage {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ResponseToolCall {
     pub id: String,
+    pub r#type: String,
     pub function: ResponseFunctionCall,
 }
 
@@ -255,12 +254,12 @@ pub struct DeltaFunctionCall {
 
 use crate::markers::{DeepSeek, OpenAI};
 use crate::request::ToolCall as AgentToolCall;
-use crate::types::{AgentEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
+use crate::types::{ProtocolEvent, PartialToolCall, ProviderProtocol, StreamBufs, ToolCallChunk};
 
-fn parse_openai_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
+fn parse_openai_response(raw: Response) -> (Vec<ProtocolEvent>, Vec<AgentToolCall>) {
     let mut events = Vec::new();
     if let Some(u) = raw.usage {
-        events.push(AgentEvent::Usage(u.into()));
+        events.push(ProtocolEvent::Usage(u.into()));
     }
 
     let choice = match raw.choices.into_iter().next() {
@@ -269,10 +268,10 @@ fn parse_openai_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>)
     };
     let msg = choice.message;
     if let Some(r) = msg.reasoning_content.filter(|s| !s.is_empty()) {
-        events.push(AgentEvent::ReasoningToken(r));
+        events.push(ProtocolEvent::Reasoning(r));
     }
     if let Some(t) = msg.content.filter(|s| !s.is_empty()) {
-        events.push(AgentEvent::Token(t));
+        events.push(ProtocolEvent::Token(t));
     }
     let tool_calls = msg
         .tool_calls
@@ -287,11 +286,11 @@ fn parse_openai_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>)
     (events, tool_calls)
 }
 
-fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
+fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<ProtocolEvent> {
     let mut events = Vec::new();
 
     if let Some(u) = chunk.usage {
-        events.push(AgentEvent::Usage(u.into()));
+        events.push(ProtocolEvent::Usage(u.into()));
     }
 
     let choice = match chunk.choices.into_iter().next() {
@@ -313,7 +312,7 @@ fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEve
                     .as_ref()
                     .and_then(|f| f.name.clone())
                     .unwrap_or_default();
-                events.push(AgentEvent::ToolCall(ToolCallChunk {
+                events.push(ProtocolEvent::ToolCallChunk(ToolCallChunk {
                     id: id.clone(),
                     name: name.clone(),
                     delta: String::new(),
@@ -335,7 +334,7 @@ fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEve
                     .filter(|a| !a.is_empty())
                 {
                     partial.arguments.push_str(&args);
-                    events.push(AgentEvent::ToolCall(ToolCallChunk {
+                    events.push(ProtocolEvent::ToolCallChunk(ToolCallChunk {
                         id: partial.id.clone(),
                         name: partial.name.clone(),
                         delta: args,
@@ -347,11 +346,11 @@ fn parse_openai_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEve
     }
     if let Some(r) = delta.reasoning_content.filter(|s| !s.is_empty()) {
         bufs.reasoning_buf.push_str(&r);
-        events.push(AgentEvent::ReasoningToken(r));
+        events.push(ProtocolEvent::Reasoning(r));
     }
     if let Some(t) = delta.content.filter(|s| !s.is_empty()) {
         bufs.content_buf.push_str(&t);
-        events.push(AgentEvent::Token(t));
+        events.push(ProtocolEvent::Token(t));
     }
     events
 }
@@ -375,10 +374,10 @@ impl ProviderProtocol for OpenAI {
     fn build_raw(req: crate::request::Request) -> Request {
         Request::from(req)
     }
-    fn parse_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
+    fn parse_response(raw: Response) -> (Vec<ProtocolEvent>, Vec<AgentToolCall>) {
         parse_openai_response(raw)
     }
-    fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
+    fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<ProtocolEvent> {
         parse_openai_chunk(chunk, bufs)
     }
     fn finalize_stream(bufs: &mut StreamBufs) -> Vec<AgentToolCall> {
@@ -396,10 +395,10 @@ impl ProviderProtocol for DeepSeek {
     fn build_raw(req: crate::request::Request) -> Request {
         Request::from(req)
     }
-    fn parse_response(raw: Response) -> (Vec<AgentEvent>, Vec<AgentToolCall>) {
+    fn parse_response(raw: Response) -> (Vec<ProtocolEvent>, Vec<AgentToolCall>) {
         parse_openai_response(raw)
     }
-    fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<AgentEvent> {
+    fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<ProtocolEvent> {
         parse_openai_chunk(chunk, bufs)
     }
     fn finalize_stream(bufs: &mut StreamBufs) -> Vec<AgentToolCall> {

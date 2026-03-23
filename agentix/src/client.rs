@@ -4,7 +4,7 @@ use futures::stream::BoxStream;
 
 use crate::config::AgentConfig;
 use crate::error::ApiError;
-use crate::msg::Msg;
+use crate::msg::LlmEvent;
 use crate::provider::Provider;
 use crate::raw::shared::ToolDefinition;
 use crate::request::Message;
@@ -94,7 +94,7 @@ impl LlmClient {
         &self,
         messages: &[Message],
         tools:    &[ToolDefinition],
-    ) -> Result<BoxStream<'static, Msg>, ApiError> {
+    ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
         let config = self.0.config.read().unwrap().clone();
         self.0.provider.stream(&self.0.http, &config, messages, tools).await
     }

@@ -1,368 +1,264 @@
-use std::sync::{Arc, Mutex};
-
+use std::sync::Arc;
+use tokio::sync::{Mutex, RwLock};
 use futures::StreamExt;
-use serde_json::Value;
-use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, error, warn};
+use futures::stream::BoxStream;
+use tracing::debug;
 
-use crate::bus::EventBus;
 use crate::client::LlmClient;
 use crate::memory::{InMemory, Memory};
-use crate::msg::Msg;
-use crate::request::UserContent;
-use crate::tool_trait::{Tool, ToolBundle};
+use crate::msg::{AgentInput, AgentEvent, LlmEvent};
+use crate::node::Node;
+use crate::tool_trait::Tool;
 use crate::types::UsageStats;
-
-// ── AgentInput ────────────────────────────────────────────────────────────────
-
-enum AgentInput {
-    Message(Vec<UserContent>),
-    Abort,
-}
-
-// ── Runtime state ─────────────────────────────────────────────────────────────
-
-enum RuntimeState {
-    Pending {
-        tools:  ToolBundle,
-        memory: Box<dyn Memory + Send>,
-        bus:    EventBus,
-    },
-    Running {
-        inbox: mpsc::Sender<AgentInput>,
-        bus:   EventBus,
-    },
-}
-
-// ── AgentInner ────────────────────────────────────────────────────────────────
-
-struct AgentInner {
-    /// Always accessible — config changes work before and after first send().
-    client: LlmClient,
-    state:  Mutex<RuntimeState>,
-    /// Accumulated token usage for the entire life of this agent.
-    usage:  Arc<Mutex<UsageStats>>,
-    /// Lazily-created Sender<Msg> bridge for Node::input() compatibility.
-    msg_inlet: std::sync::OnceLock<mpsc::Sender<Msg>>,
-}
 
 // ── Agent ─────────────────────────────────────────────────────────────────────
 
-/// A clonable, actor-style agent handle.
-///
-/// Construction is **lazy**: the background task is spawned on the first call
-/// to [`send`][Agent::send].  All configuration methods can be called freely
-/// before and after that point — they take effect on the next API request.
-///
-/// All clones share the same inbox, event bus, and LLM config.
+/// A stream-based agent that transforms [`AgentInput`] into [`AgentEvent`].
 #[derive(Clone)]
-pub struct Agent(Arc<AgentInner>);
+pub struct Agent {
+    client: LlmClient,
+    tools:  Arc<RwLock<crate::tool_trait::ToolBundle>>,
+    memory: Arc<Mutex<Box<dyn Memory + Send>>>,
+    usage:  Arc<std::sync::Mutex<UsageStats>>,
+}
 
 impl Agent {
-    // ── Constructors ──────────────────────────────────────────────────────────
-
     pub fn new(client: LlmClient) -> Self {
-        Self::with_parts(client, ToolBundle::new(), Box::new(InMemory::new()), EventBus::new(512))
+        let tools = crate::tool_trait::ToolBundle::new();
+        let memory = InMemory::new();
+        Self::assemble(client, tools, memory)
     }
 
     pub fn assemble(
         client: LlmClient,
-        tools:  ToolBundle,
+        tools:  crate::tool_trait::ToolBundle,
         memory: impl Memory + Send + 'static,
-        bus:    EventBus,
     ) -> Self {
-        Self::with_parts(client, tools, Box::new(memory), bus)
-    }
-
-    fn with_parts(
-        client: LlmClient,
-        tools:  ToolBundle,
-        memory: Box<dyn Memory + Send>,
-        bus:    EventBus,
-    ) -> Self {
-        Self(Arc::new(AgentInner {
+        Self {
             client,
-            state: Mutex::new(RuntimeState::Pending { tools, memory, bus }),
-            usage: Arc::new(Mutex::new(UsageStats::default())),
-            msg_inlet: std::sync::OnceLock::new(),
-        }))
+            tools:  Arc::new(RwLock::new(tools)),
+            memory: Arc::new(Mutex::new(Box::new(memory))),
+            usage:  Arc::new(std::sync::Mutex::new(UsageStats::default())),
+        }
     }
-
-    // ── Config methods — always available via LlmClient's RwLock ─────────────
 
     pub fn model(self, m: impl Into<String>) -> Self {
-        self.0.client.model(m); self
+        self.client.model(m); self
     }
 
     pub fn base_url(self, url: impl Into<String>) -> Self {
-        self.0.client.base_url(url); self
+        self.client.base_url(url); self
     }
 
     pub fn system_prompt(self, p: impl Into<String>) -> Self {
-        self.0.client.system_prompt(p); self
+        self.client.system_prompt(p); self
     }
 
     pub fn max_tokens(self, n: u32) -> Self {
-        self.0.client.max_tokens(n); self
+        self.client.max_tokens(n); self
     }
 
     pub fn temperature(self, t: f32) -> Self {
-        self.0.client.temperature(t); self
+        self.client.temperature(t); self
     }
 
-    /// Add a tool.  Must be called before the first [`send`][Self::send].
-    pub fn tool(self, t: impl crate::tool_trait::Tool + 'static) -> Self {
-        let mut s = self.0.state.lock().unwrap();
-        if let RuntimeState::Pending { tools, .. } = &mut *s {
-            tools.push(t);
-        } else {
-            warn!("tool() called after agent started — ignored");
-        }
-        drop(s);
+    pub async fn tool(self, t: impl Tool + 'static) -> Self {
+        self.tools.write().await.push(t);
         self
     }
 
-    /// Replace the memory backend.  Must be called before the first [`send`][Self::send].
-    pub fn memory(self, m: impl Memory + Send + 'static) -> Self {
-        let mut s = self.0.state.lock().unwrap();
-        if let RuntimeState::Pending { memory, .. } = &mut *s {
-            *memory = Box::new(m);
-        } else {
-            warn!("memory() called after agent started — ignored");
-        }
-        drop(s);
+    pub async fn memory(self, m: impl Memory + Send + 'static) -> Self {
+        *self.memory.lock().await = Box::new(m);
         self
     }
 
-    /// Replace the event bus.  Must be called before the first [`send`][Self::send].
-    pub fn bus(self, b: EventBus) -> Self {
-        let mut s = self.0.state.lock().unwrap();
-        if let RuntimeState::Pending { bus, .. } = &mut *s {
-            *bus = b;
-        }
-        drop(s);
-        self
-    }
-
-    // ── Lazy spawn ────────────────────────────────────────────────────────────
-
-    fn ensure_running(&self) -> (mpsc::Sender<AgentInput>, EventBus) {
-        let mut s = self.0.state.lock().unwrap();
-
-        if let RuntimeState::Running { inbox, bus } = &*s {
-            return (inbox.clone(), bus.clone());
-        }
-
-        let (inbox_tx, inbox_rx) = mpsc::channel::<AgentInput>(64);
-
-        // Swap out Pending to get owned config
-        let prev = std::mem::replace(&mut *s, RuntimeState::Running {
-            inbox: inbox_tx.clone(),
-            bus:   EventBus::new(1), // placeholder, overwritten below
-        });
-
-        let (tools, memory, bus) = match prev {
-            RuntimeState::Pending { tools, memory, bus } => (tools, memory, bus),
-            RuntimeState::Running { .. } => unreachable!(),
-        };
-
-        *s = RuntimeState::Running { inbox: inbox_tx.clone(), bus: bus.clone() };
-        drop(s);
-
-        tokio::spawn(agent_loop(
-            self.0.client.clone(), tools, memory, inbox_rx, bus.clone(), self.0.usage.clone(),
-        ));
-
-        (inbox_tx, bus)
-    }
-
-    // ── Public API ────────────────────────────────────────────────────────────
-
-    /// Send a plain-text user message.  Spawns the background task on first call.
-    pub async fn send(&self, msg: &str) {
-        self.send_parts(vec![UserContent::Text(msg.to_string())]).await;
-    }
-
-    /// Send a multimodal user message (text and/or images).
-    pub async fn send_parts(&self, parts: Vec<UserContent>) {
-        let (inbox, _) = self.ensure_running();
-        if inbox.send(AgentInput::Message(parts)).await.is_err() {
-            error!("agent inbox closed");
-        }
-    }
-
-    /// Abort the current generation turn (if any).
-    /// Queued messages are preserved and processed after the abort.
-    pub async fn abort(&self) {
-        let (inbox, _) = self.ensure_running();
-        let _ = inbox.send(AgentInput::Abort).await;
-    }
-
-    /// Subscribe to all events emitted by this agent.
-    pub fn subscribe(&self) -> broadcast::Receiver<Msg> {
-        let (_, bus) = self.ensure_running();
-        bus.subscribe()
-    }
-
-    /// Returns a `Sender<Msg>` that routes `Msg::User(text)` into the agent
-    /// as a user message.  Other variants are silently ignored.
-    ///
-    /// The bridge task is created once and reused on subsequent calls.
-    pub fn inbox_sender(&self) -> mpsc::Sender<Msg> {
-        self.0.msg_inlet.get_or_init(|| {
-            let (tx, mut rx) = mpsc::channel::<Msg>(64);
-            let agent = self.clone();
-            tokio::spawn(async move {
-                while let Some(msg) = rx.recv().await {
-                    if let Msg::User(parts) = msg {
-                        agent.send_parts(parts).await;
-                    }
-                }
-            });
-            tx
-        }).clone()
-    }
-
-    /// Access the underlying [`EventBus`].
-    pub fn event_bus(&self) -> EventBus {
-        let (_, bus) = self.ensure_running();
-        bus
-    }
-
-    /// Read a snapshot of the current [`AgentConfig`].
-    pub fn config_snapshot(&self) -> crate::config::AgentConfig {
-        self.0.client.snapshot()
-    }
-
-    /// Return the accumulated token usage for this agent.
     pub fn usage(&self) -> UsageStats {
-        self.0.usage.lock().unwrap().clone()
+        self.usage.lock().unwrap().clone()
+    }
+
+    pub fn config_snapshot(&self) -> crate::config::AgentConfig {
+        self.client.snapshot()
     }
 }
 
-// ── agent_loop ────────────────────────────────────────────────────────────────
+// ── Node implementation ───────────────────────────────────────────────────────
 
-async fn agent_loop(
-    client:     LlmClient,
-    tools:      ToolBundle,
-    mut memory: Box<dyn Memory + Send>,
-    mut inbox:  mpsc::Receiver<AgentInput>,
-    bus:        EventBus,
-    usage:      Arc<Mutex<UsageStats>>,
-) {
-    // Wrap tools in Arc so concurrent tool-call futures can share it.
-    let tools = Arc::new(tools);
-    // Messages received while a generation is in-flight are buffered here.
-    let mut queued: std::collections::VecDeque<Vec<UserContent>> = std::collections::VecDeque::new();
+impl Node for Agent {
+    type Input = AgentInput;
+    type Output = AgentEvent;
 
-    loop {
-        // ── Wait for next user message ────────────────────────────────────────
-        let user_msg = if let Some(m) = queued.pop_front() {
-            m
-        } else {
+    fn run(self, mut input: BoxStream<'static, Self::Input>) -> BoxStream<'static, Self::Output> {
+        let agent = self;
+        
+        async_stream::stream! {
+            let mut pending_inputs = std::collections::VecDeque::new();
+
             loop {
-                match inbox.recv().await {
-                    None                          => return, // sender dropped
-                    Some(AgentInput::Message(m))  => break m,
-                    Some(AgentInput::Abort)       => {}      // nothing to abort when idle
-                }
-            }
-        };
+                // 1. Get next input (either from queue or from stream)
+                let item = if let Some(item) = pending_inputs.pop_front() {
+                    item
+                } else {
+                    match input.next().await {
+                        Some(item) => item,
+                        None => break, // input stream closed, terminate agent
+                    }
+                };
 
-        bus.send(Msg::TurnStart);
-        let user_ev = Msg::User(user_msg.clone());
-        memory.record(&user_ev).await;
-        bus.send(user_ev);
+                // 2. Process Input
+                let should_trigger_llm = match item {
+                    AgentInput::User(_) | AgentInput::ToolResult { .. } => {
+                        agent.memory.lock().await.record_input(&item).await;
+                        true
+                    }
+                    AgentInput::Abort => false,
+                };
 
-        // ── Tool-call rounds ──────────────────────────────────────────────────
-        'turn: loop {
-            let ctx  = memory.context().await;
-            let defs = tools.raw_tools();
+                if !should_trigger_llm { continue; }
 
-            let mut stream = match client.stream(&ctx, &defs).await {
-                Ok(s)  => s,
-                Err(e) => {
-                    let msg = Msg::Error(e.to_string());
-                    memory.record(&msg).await;
-                    bus.send(msg);
-                    break 'turn;
-                }
-            };
+                // 3. Interaction Loop (Tool-call rounds)
+                'turn: loop {
+                    let ctx = agent.memory.lock().await.context().await;
+                    let defs = agent.tools.read().await.raw_tools();
 
-            // ── Drain stream, interruptible by Abort ──────────────────────────
-            let mut pending_tool_calls: Vec<(String, String, String)> = vec![];
+                    let mut stream: BoxStream<'static, LlmEvent> = match agent.client.stream(&ctx, &defs).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            let ev = AgentEvent::Error(e.to_string());
+                            agent.memory.lock().await.record_event(&ev).await;
+                            yield ev;
+                            break 'turn;
+                        }
+                    };
 
-            'stream: loop {
-                tokio::select! {
-                    biased; // check inbox first to catch Abort promptly
+                    let mut pending_tool_calls = Vec::new();
 
-                    maybe_input = inbox.recv() => {
-                        match maybe_input {
-                            None => return, // inbox closed
-                            Some(AgentInput::Abort) => {
-                                debug!("abort received mid-stream");
-                                bus.send(Msg::Done);
-                                memory.record(&Msg::Done).await;
-                                break 'turn;
+                    // ── Read LLM Stream ─────────────────────────────────────────
+                    'stream: loop {
+                        tokio::select! {
+                            biased;
+
+                            new_input = input.next() => {
+                                match new_input {
+                                    Some(AgentInput::Abort) => {
+                                        debug!("abort received mid-stream");
+                                        let ev = AgentEvent::Done;
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                        break 'turn; // completely exit the turn
+                                    }
+                                    Some(other) => {
+                                        pending_inputs.push_back(other);
+                                    }
+                                    None => break 'turn, // input closed
+                                }
                             }
-                            Some(AgentInput::Message(m)) => {
-                                queued.push_back(m);
+
+                            maybe_llm_ev = stream.next() => {
+                                match maybe_llm_ev {
+                                    Some(LlmEvent::Token(t)) => {
+                                        let ev = AgentEvent::Token(t);
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                    }
+                                    Some(LlmEvent::Reasoning(r)) => {
+                                        let ev = AgentEvent::Reasoning(r);
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                    }
+                                    Some(LlmEvent::ToolCallChunk(tc)) => {
+                                        let ev = AgentEvent::ToolCallChunk(tc);
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                    }
+                                    Some(LlmEvent::ToolCall(tc)) => {
+                                        pending_tool_calls.push(tc.clone());
+                                        let ev = AgentEvent::ToolCall(tc);
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                    }
+                                    Some(LlmEvent::Usage(stats)) => {
+                                        *agent.usage.lock().unwrap() += stats.clone();
+                                        let ev = AgentEvent::Usage(stats);
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                    }
+                                    Some(LlmEvent::Error(e)) => {
+                                        let ev = AgentEvent::Error(e);
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                        break 'turn;
+                                    }
+                                    Some(LlmEvent::Done) | None => {
+                                        break 'stream;
+                                    }
+                                }
                             }
                         }
                     }
 
-                    maybe_msg = stream.next() => {
-                        match maybe_msg {
-                            None => break 'stream, // stream ended unexpectedly
-                            Some(Msg::Done) => {
-                                if pending_tool_calls.is_empty() {
-                                    bus.send(Msg::Done);
-                                    memory.record(&Msg::Done).await;
-                                    break 'turn;
+                    if pending_tool_calls.is_empty() {
+                        let ev = AgentEvent::Done;
+                        agent.memory.lock().await.record_event(&ev).await;
+                        yield ev;
+                        break 'turn;
+                    }
+
+                    // ── Execute Tools (Concurrent & Interruptible) ─────────────
+                    let mut tool_stream = futures::stream::iter(pending_tool_calls.into_iter().map(|tc| {
+                        let tools = Arc::clone(&agent.tools);
+                        async move {
+                            let parsed: serde_json::Value = serde_json::from_str(&tc.arguments).unwrap_or(serde_json::Value::Null);
+                            let result = tools.read().await.call(&tc.name, parsed).await;
+                            (tc.id, tc.name, result)
+                        }
+                    })).buffer_unordered(10); // execute up to 10 tools concurrently
+
+                    let mut aborted = false;
+                    
+                    loop {
+                        tokio::select! {
+                            biased;
+
+                            new_input = input.next() => {
+                                match new_input {
+                                    Some(AgentInput::Abort) => {
+                                        debug!("abort received during tool execution");
+                                        let ev = AgentEvent::Done;
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                        aborted = true;
+                                        break; // break tool loop
+                                    }
+                                    Some(other) => {
+                                        pending_inputs.push_back(other);
+                                    }
+                                    None => {
+                                        aborted = true;
+                                        break;
+                                    }
                                 }
-                                break 'stream; // has tool calls — execute below
                             }
-                            Some(msg @ Msg::ToolCall { .. }) => {
-                                if let Msg::ToolCall { ref id, ref name, ref args } = msg {
-                                    pending_tool_calls.push((
-                                        id.clone(), name.clone(), args.clone(),
-                                    ));
+
+                            maybe_res = tool_stream.next() => {
+                                match maybe_res {
+                                    Some((call_id, name, result)) => {
+                                        let ev = AgentEvent::ToolResult { call_id, name, result };
+                                        agent.memory.lock().await.record_event(&ev).await;
+                                        yield ev;
+                                    }
+                                    None => break, // all tools finished
                                 }
-                                bus.send(msg);
-                            }
-                            Some(Msg::Usage(stats)) => {
-                                *usage.lock().unwrap() += stats.clone();
-                                bus.send(Msg::Usage(stats));
-                            }
-                            Some(other) => {
-                                memory.record(&other).await;
-                                bus.send(other);
                             }
                         }
                     }
+                    
+                    if aborted {
+                        break 'turn;
+                    }
+                    
+                    // Loop back to start the next LLM round with tool results
                 }
             }
-
-            if pending_tool_calls.is_empty() {
-                break 'turn;
-            }
-
-            // ── Execute tool calls concurrently ───────────────────────────────
-            let futs: Vec<_> = pending_tool_calls.into_iter().map(|(id, name, args)| {
-                let tools = Arc::clone(&tools);
-                async move {
-                    let parsed: Value = serde_json::from_str(&args).unwrap_or(Value::Null);
-                    let result = tools.call(&name, parsed).await;
-                    (id, name, result)
-                }
-            }).collect();
-
-            for (call_id, name, result) in futures::future::join_all(futs).await {
-                let msg = Msg::ToolResult { call_id, name, result };
-                memory.record(&msg).await;
-                bus.send(msg);
-            }
-            // loop back → next LLM call with tool results in context
-        }
+        }.boxed()
     }
 }

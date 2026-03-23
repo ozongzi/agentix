@@ -5,29 +5,14 @@ use tracing::{warn, debug};
 
 use crate::config::AgentConfig;
 use crate::error::ApiError;
-use crate::msg::Msg;
+use crate::msg::LlmEvent;
 use crate::request::{Message, Request, ToolChoice};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{ProviderProtocol, StreamBufs, AgentEvent};
+use crate::types::{ProviderProtocol, StreamBufs, ProtocolEvent};
 
 // ── Provider trait ─────────────────────────────────────────────────────────────
 
 /// Abstracts a single LLM provider.
-///
-/// Implementors handle provider-specific HTTP, serialization, and chunk
-/// parsing.  The `http` client is provided by [`LlmClient`][crate::LlmClient]
-/// so connection pools are shared across all calls.
-///
-/// # Stream contract
-/// The returned stream MUST:
-/// - Yield [`Msg::Token`] / [`Msg::Reasoning`] immediately as they arrive.
-/// - Yield zero or more **complete** [`Msg::ToolCall`] (fully assembled args)
-///   after all tokens.
-/// - Yield [`Msg::Usage`] once per turn (if supported).
-/// - Yield [`Msg::Done`] as the final item.
-///
-/// # Custom providers
-/// Implement this trait to add any LLM backend not covered by the built-ins.
 #[async_trait]
 pub trait Provider: Send + Sync {
     async fn stream(
@@ -36,7 +21,7 @@ pub trait Provider: Send + Sync {
         config:   &AgentConfig,
         messages: &[Message],
         tools:    &[ToolDefinition],
-    ) -> Result<BoxStream<'static, Msg>, ApiError>;
+    ) -> Result<BoxStream<'static, LlmEvent>, ApiError>;
 }
 
 // ── Shared HTTP POST helper ────────────────────────────────────────────────────
@@ -99,7 +84,7 @@ impl<P: ProviderProtocol> Provider for ProtocolProvider<P> {
         config:   &AgentConfig,
         messages: &[Message],
         tools:    &[ToolDefinition],
-    ) -> Result<BoxStream<'static, Msg>, ApiError> {
+    ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
         let tool_choice = if tools.is_empty() { None } else { Some(ToolChoice::Auto) };
         let req = Request {
             system_message:  config.system_prompt.clone(),
@@ -121,7 +106,6 @@ impl<P: ProviderProtocol> Provider for ProtocolProvider<P> {
         );
         let raw = P::build_raw(req);
 
-        // Exponential backoff retry logic
         let mut attempts = 0;
         let mut delay = config.retry_delay_ms;
 
@@ -137,14 +121,12 @@ impl<P: ProviderProtocol> Provider for ProtocolProvider<P> {
                     attempts += 1;
                     warn!(error = %e, attempt = attempts, "transient error, retrying in {}ms", delay);
                     tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
-                    delay *= 2; // exponential backoff
+                    delay *= 2; 
                 }
                 Err(e) => return Err(e),
             }
         };
 
-        // Stream tokens immediately; accumulate tool-call chunks; emit complete
-        // ToolCalls + TurnDone once the SSE stream closes.
         let out = async_stream::stream! {
             let mut bufs  = StreamBufs::new();
             let mut sse   = resp.bytes_stream().eventsource();
@@ -157,30 +139,30 @@ impl<P: ProviderProtocol> Provider for ProtocolProvider<P> {
                             Ok(chunk) => {
                                 for ae in P::parse_chunk(chunk, &mut bufs) {
                                     match ae {
-                                        AgentEvent::Token(t)          => yield Msg::Token(t),
-                                        AgentEvent::ReasoningToken(t) => yield Msg::Reasoning(t),
-                                        AgentEvent::Usage(stats)      => yield Msg::Usage(stats),
-                                        _ => {} // partial tool-call chunks accumulate in bufs
+                                        ProtocolEvent::Token(t)     => yield LlmEvent::Token(t),
+                                        ProtocolEvent::Reasoning(t) => yield LlmEvent::Reasoning(t),
+                                        ProtocolEvent::ToolCallChunk(tc) => yield LlmEvent::ToolCallChunk(tc),
+                                        ProtocolEvent::Usage(stats) => yield LlmEvent::Usage(stats),
                                     }
                                 }
                             }
                             Err(e) => {
-                                // Sometimes providers send non-JSON "keep-alive" comments or similar.
-                                // We debug log them but don't crash.
                                 debug!(data = %ev.data, error = %e, "chunk parse failed (ignoring)");
                             }
                         }
                     }
-                    Err(e) => warn!(error = %e, "eventsource error"),
+                    Err(e) => {
+                        yield LlmEvent::Error(e.to_string());
+                        break;
+                    }
                 }
             }
 
-            // Emit complete (assembled) tool calls
             for tc in P::finalize_stream(&mut bufs) {
-                yield Msg::ToolCall { id: tc.id, name: tc.name, args: tc.arguments };
+                yield LlmEvent::ToolCall(tc);
             }
 
-            yield Msg::Done;
+            yield LlmEvent::Done;
         };
 
         Ok(out.boxed())
@@ -208,7 +190,7 @@ macro_rules! make_provider {
                 config: &AgentConfig,
                 messages: &[Message],
                 tools: &[ToolDefinition],
-            ) -> Result<BoxStream<'static, Msg>, ApiError> {
+            ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
                 self.0.stream(http, config, messages, tools).await
             }
         }

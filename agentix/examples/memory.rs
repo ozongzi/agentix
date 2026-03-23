@@ -6,8 +6,10 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example memory
 
-use agentix::{Msg, SlidingWindow};
+use agentix::{AgentEvent, AgentInput, Node, SlidingWindow};
+use futures::StreamExt;
 use std::io::Write;
+use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -16,8 +18,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SlidingWindow keeps the last 10 turns; InMemory (default) keeps all.
     let agent = agentix::deepseek(key)
         .system_prompt("You are a helpful assistant. Keep answers brief.")
-        .memory(SlidingWindow::new(10))
+        .memory(SlidingWindow::new(10)).await
         .max_tokens(256);
+
+    let (tx, rx) = mpsc::channel(64);
+    let mut response = agent.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
 
     let turns = [
         "What is the largest planet in our solar system?",
@@ -31,14 +36,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Turn {}: {prompt}", i + 1);
         print!("Agent: ");
 
-        let mut rx = agent.subscribe();
-        agent.send(prompt).await;
+        tx.send(AgentInput::User(vec![prompt.to_string().into()])).await?;
 
-        while let Ok(msg) = rx.recv().await {
-            match msg {
-                Msg::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
-                Msg::Done     => break,
-                Msg::Error(e) => { eprintln!("Error: {e}"); break; }
+        while let Some(event) = response.next().await {
+            match event {
+                AgentEvent::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
+                AgentEvent::Done     => break,
+                AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
                 _             => {}
             }
         }
