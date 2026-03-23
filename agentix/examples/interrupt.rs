@@ -4,8 +4,7 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example interrupt
 
-use agentix::{AgentEvent, AgentInput, ToolOutput, streaming_tool};
-use async_stream::stream;
+use agentix::{AgentEvent, AgentInput, ToolOutput, tool};
 use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
@@ -13,12 +12,13 @@ use tokio::time::{Duration, sleep};
 
 struct SlowCounter;
 
-#[streaming_tool]
-impl Tool for SlowCounter {
+#[tool]
+impl agentix::Tool for SlowCounter {
     /// Count from 1 to n with a 200 ms delay per step.
     /// n: how high to count
-    fn count_to(&self, n: u32) -> impl futures::Stream<Item = ToolOutput> {
-        stream! {
+    #[streaming]
+    fn count_to(&self, n: u32) {
+        async_stream::stream! {
             for i in 1..=n {
                 sleep(Duration::from_millis(200)).await;
                 yield ToolOutput::Progress(format!("{i}/{n}"));

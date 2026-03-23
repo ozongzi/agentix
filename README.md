@@ -193,15 +193,19 @@ let mut agent = agentix::deepseek("sk-...").tool(Calculator);
 
 ### Streaming tools
 
+Add `#[streaming]` to a method inside `#[tool]`. No return type annotation needed — the macro infers it. Use `async_stream::stream!` in the body for `yield` syntax.
+
 ```rust
-use agentix::{streaming_tool, ToolOutput};
+use agentix::{tool, ToolOutput};
 
 struct ProgressTool;
 
-#[streaming_tool]
-impl Tool for ProgressTool {
+#[tool]
+impl agentix::Tool for ProgressTool {
     /// Run a long job and stream progress.
-    fn long_job(&self, steps: u32) -> impl futures::Stream<Item = ToolOutput> {
+    /// steps: number of steps
+    #[streaming]
+    fn long_job(&self, steps: u32) {
         async_stream::stream! {
             for i in 1..=steps {
                 yield ToolOutput::Progress(format!("{i}/{steps}"));
@@ -211,6 +215,8 @@ impl Tool for ProgressTool {
     }
 }
 ```
+
+Normal and streaming methods can be freely mixed in the same `#[tool]` block.
 
 ---
 

@@ -106,7 +106,7 @@ pub use node::{Node, TapNode, PromptNode};
 pub use types::UsageStats;
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
 
-pub use agentix_macros::{tool, streaming_tool};
+pub use agentix_macros::tool;
 pub use schemars;
 pub use serde;
 pub use serde_json;

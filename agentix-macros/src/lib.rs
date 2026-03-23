@@ -68,41 +68,77 @@ fn is_option(ty: &Type) -> bool {
     false
 }
 
+fn has_streaming_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("streaming"))
+}
+
+fn strip_streaming_attr(attrs: &mut Vec<syn::Attribute>) {
+    attrs.retain(|a| !a.path().is_ident("streaming"));
+}
+
 struct ToolMethod {
-    tool_name: String,
+    tool_name:   String,
     description: String,
-    params: Vec<ParamInfo>,
-    body: syn::Block,
-    output: syn::ReturnType,
+    params:      Vec<ParamInfo>,
+    body:        syn::Block,
+    output:      syn::ReturnType,
+    streaming:   bool,
 }
 
 struct ParamInfo {
-    name: String,
-    ty: Type,
-    desc: String,
+    name:     String,
+    ty:       Type,
+    desc:     String,
     optional: bool,
 }
 
-// ── #[tool] (One-shot) ────────────────────────────────────────────────────────
+// ── #[tool] ───────────────────────────────────────────────────────────────────
 
+/// Annotate an `impl Tool for X` block (or a single fn) to generate the full
+/// `Tool` trait implementation.
+///
+/// ## Normal (async) methods
+/// ```ignore
+/// #[tool]
+/// impl agentix::Tool for MyTool {
+///     /// Greet someone.
+///     /// name: the person's name
+///     async fn greet(&self, name: String) -> String {
+///         format!("Hello, {name}!")
+///     }
+/// }
+/// ```
+///
+/// ## Streaming methods — add `#[streaming]` on the method
+///
+/// Write the body with plain `yield` expressions. No return type needed.
+/// The macro wraps it in `async_stream::stream!` automatically.
+///
+/// ```ignore
+/// #[tool]
+/// impl agentix::Tool for Counter {
+///     /// Count from 1 to n.
+///     /// n: upper bound
+///     #[streaming]
+///     fn count_to(&self, n: u32) {
+///         for i in 1..=n {
+///             yield agentix::ToolOutput::Progress(format!("{i}/{n}"));
+///         }
+///         yield agentix::ToolOutput::Result(agentix::serde_json::json!({ "final": n }));
+///     }
+/// }
+/// ```
+///
+/// Both styles can be mixed in the same impl block.
 #[proc_macro_attribute]
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
-    if let Ok(item_fn) = syn::parse::<ItemFn>(item.clone())
-        && item_fn.sig.asyncness.is_some()
-    {
-        return tool_from_fn(attr, item_fn, false);
+    // Single-function form: `#[tool]` on a standalone fn.
+    if let Ok(mut item_fn) = syn::parse::<ItemFn>(item.clone()) {
+        let is_streaming = has_streaming_attr(&item_fn.attrs);
+        strip_streaming_attr(&mut item_fn.attrs);
+        return tool_from_fn(attr, item_fn, is_streaming);
     }
-    tool_from_impl(attr, item, false)
-}
-
-// ── #[streaming_tool] ─────────────────────────────────────────────────────────
-
-#[proc_macro_attribute]
-pub fn streaming_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
-    if let Ok(item_fn) = syn::parse::<ItemFn>(item.clone()) {
-        return tool_from_fn(attr, item_fn, true);
-    }
-    tool_from_impl(attr, item, true)
+    tool_from_impl(attr, item)
 }
 
 // ── Generators ────────────────────────────────────────────────────────────────
@@ -137,12 +173,7 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
             let ty = (*pt.ty).clone();
             let desc = param_docs.get(&name).cloned().unwrap_or_default();
             let optional = is_option(&ty);
-            params.push(ParamInfo {
-                name,
-                ty,
-                desc,
-                optional,
-            });
+            params.push(ParamInfo { name, ty, desc, optional });
         }
     }
 
@@ -152,10 +183,11 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
         params,
         body: *item_fn.block,
         output: item_fn.sig.output,
+        streaming: is_streaming,
     };
 
     let raw_tools_body = generate_raw_tools(&method);
-    let call_arm = generate_call_arm(&method, is_streaming);
+    let call_arm = generate_call_arm(&method);
 
     let expanded = quote! {
         #[allow(non_camel_case_types)]
@@ -183,8 +215,8 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
     expanded.into()
 }
 
-fn tool_from_impl(attr: TokenStream, item: TokenStream, is_streaming: bool) -> TokenStream {
-    let item_impl = parse_macro_input!(item as ItemImpl);
+fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut item_impl = parse_macro_input!(item as ItemImpl);
 
     let override_name: Option<String> = if !attr.is_empty() {
         let s = TokenStream2::from(attr).to_string();
@@ -199,11 +231,15 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream, is_streaming: bool) -> T
 
     let mut tool_methods: Vec<ToolMethod> = vec![];
 
-    for item in &item_impl.items {
+    for item in &mut item_impl.items {
         if let ImplItem::Fn(method) = item {
+            let is_streaming = has_streaming_attr(&method.attrs);
+            // Skip non-async, non-streaming methods.
             if !is_streaming && method.sig.asyncness.is_none() {
                 continue;
             }
+            strip_streaming_attr(&mut method.attrs);
+
             let fn_name = method.sig.ident.to_string();
             let tool_name = override_name.clone().unwrap_or_else(|| fn_name.clone());
             let doc_lines = extract_doc(&method.attrs);
@@ -220,12 +256,7 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream, is_streaming: bool) -> T
                     let ty = (*pt.ty).clone();
                     let desc = param_docs.get(&name).cloned().unwrap_or_default();
                     let optional = is_option(&ty);
-                    params.push(ParamInfo {
-                        name,
-                        ty,
-                        desc,
-                        optional,
-                    });
+                    params.push(ParamInfo { name, ty, desc, optional });
                 }
             }
             tool_methods.push(ToolMethod {
@@ -234,13 +265,13 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream, is_streaming: bool) -> T
                 params,
                 body: method.block.clone(),
                 output: method.sig.output.clone(),
+                streaming: is_streaming,
             });
         }
     }
 
     let raw_tools_body = tool_methods.iter().map(generate_raw_tools);
-    let call_arms = tool_methods.iter().map(|m| generate_call_arm(m, is_streaming));
-
+    let call_arms = tool_methods.iter().map(generate_call_arm);
     let self_ty = &item_impl.self_ty;
 
     let expanded = quote! {
@@ -288,7 +319,7 @@ fn generate_raw_tools(method: &ToolMethod) -> proc_macro2::TokenStream {
         .filter(|p| !p.optional)
         .map(|p| p.name.as_str())
         .collect();
-    
+
     quote! {{
         let mut __gen = agentix::schemars::SchemaGenerator::default();
         let mut properties = agentix::serde_json::Map::new();
@@ -318,7 +349,7 @@ fn generate_raw_tools(method: &ToolMethod) -> proc_macro2::TokenStream {
     }}
 }
 
-fn generate_call_arm(method: &ToolMethod, is_streaming: bool) -> proc_macro2::TokenStream {
+fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
     let tool_name = &method.tool_name;
     let body = &method.body;
     let output = &method.output;
@@ -342,13 +373,13 @@ fn generate_call_arm(method: &ToolMethod, is_streaming: bool) -> proc_macro2::To
         }
     });
 
-    if is_streaming {
+    if method.streaming {
+        // Wrap body in async_stream::stream! — user writes plain `yield` expressions.
         quote! {
             #tool_name => {
                 use agentix::futures::StreamExt;
                 #(#arg_parses)*
-                
-                let __stream = (move || { #body })();
+                let __stream = async_stream::stream! { #body };
                 __stream.boxed()
             }
         }
@@ -357,7 +388,7 @@ fn generate_call_arm(method: &ToolMethod, is_streaming: bool) -> proc_macro2::To
             #tool_name => {
                 use agentix::futures::StreamExt;
                 #(#arg_parses)*
-                
+
                 let __result = (async move || #output { #body })().await;
 
                 #[allow(unused_imports)]
