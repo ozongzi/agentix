@@ -4,10 +4,11 @@
 //! These live in `tests/` (integration test harness) so the generated code's
 //! `agentix::` paths resolve correctly.
 
-use agentix::tool;
+use agentix::{tool, ToolOutput};
 use agentix::tool_trait::Tool;
 use serde::Serialize;
 use serde_json::{Value, json};
+use futures::StreamExt;
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ impl Tool for AnyhowResultTool {
         if success {
             Ok(42)
         } else {
-            Err(std::io::Error::new(std::io::ErrorKind::Other, "io error"))
+            Err(std::io::Error::other("io error"))
         }
     }
 }
@@ -129,7 +130,14 @@ impl Tool for AnyhowResultTool {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async fn call(tool: &impl Tool, name: &str, args: Value) -> Value {
-    tool.call(name, args).await
+    let mut stream = tool.call(name, args).await;
+    let mut last_res = Value::Null;
+    while let Some(ev) = stream.next().await {
+        if let ToolOutput::Result(v) = ev {
+            last_res = v;
+        }
+    }
+    last_res
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

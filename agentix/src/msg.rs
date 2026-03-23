@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use serde_json::Value;
-use crate::request::{UserContent, ToolCall};
+use crate::request::{ToolCall, UserContent};
 use crate::types::UsageStats;
+use serde_json::Value;
+use std::sync::Arc;
 
 /// Trait for custom payloads carried in events.
 pub trait CustomEvent: std::fmt::Debug + Send + Sync + 'static {
@@ -32,7 +32,7 @@ pub enum LlmEvent {
 // ── Agent Events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by an Agent node.
-/// 
+///
 /// This is what the outside world or an orchestrator sees.
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
@@ -47,14 +47,14 @@ pub enum AgentEvent {
     /// A tool is reporting progress or streaming intermediate output.
     ToolProgress {
         call_id: String,
-        name:    String,
+        name: String,
         progress: String,
     },
     /// A tool has finished, here is the result.
     ToolResult {
         call_id: String,
-        name:    String,
-        result:  Value,
+        name: String,
+        result: Value,
     },
     /// Accumulated usage for the turn.
     Usage(UsageStats),
@@ -74,10 +74,19 @@ pub enum AgentInput {
     /// A new message from the user.
     User(Vec<UserContent>),
     /// The result of a tool execution.
-    ToolResult {
-        call_id: String,
-        result:  Value,
-    },
+    ToolResult { call_id: String, result: Value },
     /// Hard stop: stop current LLM stream immediately.
     Abort,
+}
+
+impl From<&str> for AgentInput {
+    fn from(s: &str) -> Self {
+        AgentInput::User(vec![s.into()])
+    }
+}
+
+impl From<String> for AgentInput {
+    fn from(s: String) -> Self {
+        AgentInput::User(vec![s.into()])
+    }
 }

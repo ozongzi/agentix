@@ -27,26 +27,22 @@ fn parse_doc(lines: &[String]) -> (String, std::collections::HashMap<String, Str
     let mut current_param: Option<String> = None;
 
     for line in lines {
-        // Blank lines are ignored.
         if line.is_empty() {
             continue;
         }
 
-        // Indented lines or list markers are continuations of the previous param.
-        if current_param.is_some()
-            && (line.starts_with(' ')
+        if let Some(key) = current_param.as_ref().filter(|_| {
+            line.starts_with(' ')
                 || line.starts_with('\t')
                 || line.starts_with('-')
-                || line.starts_with('•'))
-        {
-            let key = current_param.as_ref().unwrap();
+                || line.starts_with('•')
+        }) {
             let entry = params.entry(key.clone()).or_default();
             entry.push(' ');
             entry.push_str(line.trim());
             continue;
         }
 
-        // `identifier: description` → param entry.
         if let Some((key, val)) = line.split_once(':') {
             let key = key.trim().to_string();
             let val = val.trim().to_string();
@@ -57,7 +53,6 @@ fn parse_doc(lines: &[String]) -> (String, std::collections::HashMap<String, Str
             }
         }
 
-        // Everything else goes into the function description.
         current_param = None;
         desc_lines.push(line.clone());
     }
@@ -78,6 +73,7 @@ struct ToolMethod {
     description: String,
     params: Vec<ParamInfo>,
     body: syn::Block,
+    output: syn::ReturnType,
 }
 
 struct ParamInfo {
@@ -87,19 +83,31 @@ struct ParamInfo {
     optional: bool,
 }
 
+// ── #[tool] (One-shot) ────────────────────────────────────────────────────────
+
 #[proc_macro_attribute]
 pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
-    // 先尝试解析为独立 async fn
     if let Ok(item_fn) = syn::parse::<ItemFn>(item.clone())
         && item_fn.sig.asyncness.is_some()
     {
-        return tool_from_fn(attr, item_fn);
+        return tool_from_fn(attr, item_fn, false);
     }
-    // 否则走 impl 块路径
-    tool_from_impl(attr, item)
+    tool_from_impl(attr, item, false)
 }
 
-fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
+// ── #[streaming_tool] ─────────────────────────────────────────────────────────
+
+#[proc_macro_attribute]
+pub fn streaming_tool(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if let Ok(item_fn) = syn::parse::<ItemFn>(item.clone()) {
+        return tool_from_fn(attr, item_fn, true);
+    }
+    tool_from_impl(attr, item, true)
+}
+
+// ── Generators ────────────────────────────────────────────────────────────────
+
+fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> TokenStream {
     let fn_name = item_fn.sig.ident.to_string();
     let struct_ident = item_fn.sig.ident.clone();
 
@@ -143,90 +151,11 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
         description,
         params,
         body: *item_fn.block,
+        output: item_fn.sig.output,
     };
 
-    let raw_tools_body = {
-        let tool_name = &method.tool_name;
-        let description = &method.description;
-        let prop_inserts = method.params.iter().map(|p| {
-            let pname = &p.name;
-            let pdesc = &p.desc;
-            let ty = &p.ty;
-            quote! {{
-                let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
-                let mut prop = agentix::serde_json::to_value(schema).unwrap();
-                if let Some(obj) = prop.as_object_mut() {
-                    obj.insert("description".to_string(), agentix::serde_json::json!(#pdesc));
-                }
-                properties.insert(#pname.to_string(), prop);
-            }}
-        });
-        let required: Vec<&str> = method
-            .params
-            .iter()
-            .filter(|p| !p.optional)
-            .map(|p| p.name.as_str())
-            .collect();
-        quote! {{
-            let mut __gen = agentix::schemars::SchemaGenerator::default();
-            let mut properties = agentix::serde_json::Map::new();
-            #(#prop_inserts)*
-
-            let required: Vec<&str> = vec![#(#required),*];
-            let mut parameters = agentix::serde_json::json!({
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            });
-
-            // 如果引入了复杂类型，提取 definitions 并注入到 $defs
-            let defs = __gen.take_definitions();
-            if !defs.is_empty() {
-                parameters["$defs"] = agentix::serde_json::to_value(defs).unwrap();
-            }
-
-            agentix::raw::shared::ToolDefinition {
-                kind: agentix::raw::shared::ToolKind::Function,
-                function: agentix::raw::shared::FunctionDefinition {
-                    name: #tool_name.to_string(),
-                    description: Some(#description.to_string()),
-                    parameters,
-                    strict: None,
-                },
-            }
-        }}
-    };
-
-    let call_arm = {
-        let tool_name = &method.tool_name;
-        let body = &method.body;
-        let arg_parses = method.params.iter().map(|p| {
-            let pname = syn::Ident::new(&p.name, Span::call_site());
-            let pname_str = &p.name;
-            let ty = &p.ty;
-            quote! {
-                let #pname: #ty = match agentix::serde_json::from_value(
-                    args.get(#pname_str).cloned().unwrap_or(agentix::serde_json::Value::Null)
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return agentix::serde_json::json!({
-                        "error": format!("invalid argument '{}': {}", #pname_str, e)
-                    }),
-                };
-            }
-        });
-        quote! {
-            #tool_name => {
-                #(#arg_parses)*
-                let __result = (async move || { #body })().await;
-
-                #[allow(unused_imports)]
-                use agentix::tool_trait::{ToolResultResult, ToolResultValue};
-
-                (__result).__agentix_wrap()
-            }
-        }
-    };
+    let raw_tools_body = generate_raw_tools(&method);
+    let call_arm = generate_call_arm(&method, is_streaming);
 
     let expanded = quote! {
         #[allow(non_camel_case_types)]
@@ -238,10 +167,14 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
                 vec![#raw_tools_body]
             }
 
-            async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::serde_json::Value {
+            async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::futures::stream::BoxStream<'static, agentix::tool_trait::ToolOutput> {
                 match name {
                     #call_arm
-                    _ => agentix::serde_json::json!({"error": format!("unknown tool: {}", name)}),
+                    _ => {
+                        let err = agentix::serde_json::json!({"error": format!("unknown tool: {}", name)});
+                        use agentix::futures::StreamExt;
+                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed()
+                    }
                 }
             }
         }
@@ -250,7 +183,7 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn) -> TokenStream {
     expanded.into()
 }
 
-fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+fn tool_from_impl(attr: TokenStream, item: TokenStream, is_streaming: bool) -> TokenStream {
     let item_impl = parse_macro_input!(item as ItemImpl);
 
     let override_name: Option<String> = if !attr.is_empty() {
@@ -268,7 +201,7 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     for item in &item_impl.items {
         if let ImplItem::Fn(method) = item {
-            if method.sig.asyncness.is_none() {
+            if !is_streaming && method.sig.asyncness.is_none() {
                 continue;
             }
             let fn_name = method.sig.ident.to_string();
@@ -300,92 +233,13 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 description,
                 params,
                 body: method.block.clone(),
+                output: method.sig.output.clone(),
             });
         }
     }
 
-    let raw_tools_body = tool_methods.iter().map(|m| {
-        let tool_name = &m.tool_name;
-        let description = &m.description;
-        let prop_inserts = m.params.iter().map(|p| {
-            let pname = &p.name;
-            let pdesc = &p.desc;
-            let ty = &p.ty;
-            quote! {{
-                let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
-                let mut prop = agentix::serde_json::to_value(schema).unwrap();
-                if let Some(obj) = prop.as_object_mut() {
-                    obj.insert("description".to_string(), agentix::serde_json::json!(#pdesc));
-                }
-                properties.insert(#pname.to_string(), prop);
-            }}
-        });
-        let required: Vec<&str> = m
-            .params
-            .iter()
-            .filter(|p| !p.optional)
-            .map(|p| p.name.as_str())
-            .collect();
-        quote! {{
-            let mut __gen = agentix::schemars::SchemaGenerator::default();
-            let mut properties = agentix::serde_json::Map::new();
-            #(#prop_inserts)*
-
-            let required: Vec<&str> = vec![#(#required),*];
-            let mut parameters = agentix::serde_json::json!({
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            });
-
-            // 同样为 impl 块内的参数注入可能生成的 definitions
-            let defs = __gen.take_definitions();
-            if !defs.is_empty() {
-                parameters["$defs"] = agentix::serde_json::to_value(defs).unwrap();
-            }
-
-            agentix::raw::shared::ToolDefinition {
-                kind: agentix::raw::shared::ToolKind::Function,
-                function: agentix::raw::shared::FunctionDefinition {
-                    name: #tool_name.to_string(),
-                    description: Some(#description.to_string()),
-                    parameters,
-                    strict: None,
-                },
-            }
-        }}
-    });
-
-    let call_arms = tool_methods.iter().map(|m| {
-        let tool_name = &m.tool_name;
-        let body = &m.body;
-        let arg_parses = m.params.iter().map(|p| {
-            let pname = syn::Ident::new(&p.name, Span::call_site());
-            let pname_str = &p.name;
-            let ty = &p.ty;
-            quote! {
-                let #pname: #ty = match agentix::serde_json::from_value(
-                    args.get(#pname_str).cloned().unwrap_or(agentix::serde_json::Value::Null)
-                ) {
-                    Ok(v) => v,
-                    Err(e) => return agentix::serde_json::json!({
-                        "error": format!("invalid argument '{}': {}", #pname_str, e)
-                    }),
-                };
-            }
-        });
-        quote! {
-            #tool_name => {
-                #(#arg_parses)*
-                let __result = (async move || { #body })().await;
-
-                #[allow(unused_imports)]
-                use agentix::tool_trait::{ToolResultResult, ToolResultValue};
-
-                (__result).__agentix_wrap()
-            }
-        }
-    });
+    let raw_tools_body = tool_methods.iter().map(generate_raw_tools);
+    let call_arms = tool_methods.iter().map(|m| generate_call_arm(m, is_streaming));
 
     let self_ty = &item_impl.self_ty;
 
@@ -396,14 +250,122 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 vec![#(#raw_tools_body),*]
             }
 
-            async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::serde_json::Value {
+            async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::futures::stream::BoxStream<'static, agentix::tool_trait::ToolOutput> {
                 match name {
                     #(#call_arms)*
-                    _ => agentix::serde_json::json!({"error": format!("unknown tool: {}", name)}),
+                    _ => {
+                        let err = agentix::serde_json::json!({"error": format!("unknown tool: {}", name)});
+                        use agentix::futures::StreamExt;
+                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed()
+                    }
                 }
             }
         }
     };
 
     expanded.into()
+}
+
+fn generate_raw_tools(method: &ToolMethod) -> proc_macro2::TokenStream {
+    let tool_name = &method.tool_name;
+    let description = &method.description;
+    let prop_inserts = method.params.iter().map(|p| {
+        let pname = &p.name;
+        let pdesc = &p.desc;
+        let ty = &p.ty;
+        quote! {{
+            let schema = <#ty as agentix::schemars::JsonSchema>::json_schema(&mut __gen);
+            let mut prop = agentix::serde_json::to_value(schema).unwrap();
+            if let Some(obj) = prop.as_object_mut() {
+                obj.insert("description".to_string(), agentix::serde_json::json!(#pdesc));
+            }
+            properties.insert(#pname.to_string(), prop);
+        }}
+    });
+    let required: Vec<&str> = method
+        .params
+        .iter()
+        .filter(|p| !p.optional)
+        .map(|p| p.name.as_str())
+        .collect();
+    
+    quote! {{
+        let mut __gen = agentix::schemars::SchemaGenerator::default();
+        let mut properties = agentix::serde_json::Map::new();
+        #(#prop_inserts)*
+
+        let required: Vec<&str> = vec![#(#required),*];
+        let mut parameters = agentix::serde_json::json!({
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        });
+
+        let defs = __gen.take_definitions();
+        if !defs.is_empty() {
+            parameters["$defs"] = agentix::serde_json::to_value(defs).unwrap();
+        }
+
+        agentix::raw::shared::ToolDefinition {
+            kind: agentix::raw::shared::ToolKind::Function,
+            function: agentix::raw::shared::FunctionDefinition {
+                name: #tool_name.to_string(),
+                description: Some(#description.to_string()),
+                parameters,
+                strict: None,
+            },
+        }
+    }}
+}
+
+fn generate_call_arm(method: &ToolMethod, is_streaming: bool) -> proc_macro2::TokenStream {
+    let tool_name = &method.tool_name;
+    let body = &method.body;
+    let output = &method.output;
+    let arg_parses = method.params.iter().map(|p| {
+        let pname = syn::Ident::new(&p.name, Span::call_site());
+        let pname_str = &p.name;
+        let ty = &p.ty;
+        quote! {
+            let #pname: #ty = match agentix::serde_json::from_value(
+                args.get(#pname_str).cloned().unwrap_or(agentix::serde_json::Value::Null)
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    let err = agentix::serde_json::json!({
+                        "error": format!("invalid argument '{}': {}", #pname_str, e)
+                    });
+                    use agentix::futures::StreamExt;
+                    return agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed();
+                }
+            };
+        }
+    });
+
+    if is_streaming {
+        quote! {
+            #tool_name => {
+                use agentix::futures::StreamExt;
+                #(#arg_parses)*
+                
+                let __stream = (move || { #body })();
+                __stream.boxed()
+            }
+        }
+    } else {
+        quote! {
+            #tool_name => {
+                use agentix::futures::StreamExt;
+                #(#arg_parses)*
+                
+                let __result = (async move || #output { #body })().await;
+
+                #[allow(unused_imports)]
+                use agentix::tool_trait::{ToolResultResult, ToolResultValue};
+
+                let __val = (__result).__agentix_wrap();
+                agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(__val)]).boxed()
+            }
+        }
+    }
 }

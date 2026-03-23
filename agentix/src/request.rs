@@ -70,7 +70,9 @@ impl Message {
     /// Note: This is an estimation. Different providers have slightly different
     /// tokenization rules and overheads for message metadata (role, name, etc.).
     pub fn estimate_tokens(&self) -> usize {
-        let bpe = tiktoken_rs::cl100k_base().unwrap();
+        use std::sync::OnceLock;
+        static BPE: OnceLock<tiktoken_rs::CoreBPE> = OnceLock::new();
+        let bpe = BPE.get_or_init(|| tiktoken_rs::cl100k_base().unwrap());
         let mut tokens = 0;
 
         match self {

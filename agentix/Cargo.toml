@@ -1,6 +1,6 @@
 [package]
 name = "agentix"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "Multi-provider LLM agent framework for Rust — streaming, tool calls, DeepSeek, OpenAI, Anthropic, Gemini"
 authors = ["ozongzi <ozongzi@icloud.com>"]
@@ -47,6 +47,7 @@ rmcp = { version = "1.1", optional = true }
 
 # Optional: HTTP server for mcp-server feature
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "tokio"] }
+tokio-util = { version = "0.7.18", features = ["net"] }
 
 [dev-dependencies]
 wiremock = "0.5"

@@ -261,6 +261,6 @@ mod tests {
             v.get("x_custom").and_then(|val| val.as_str()).unwrap(),
             "v1"
         );
-        assert_eq!(v.get("x_flag").and_then(|val| val.as_bool()).unwrap(), true);
+        assert!(v.get("x_flag").and_then(|val| val.as_bool()).unwrap());
     }
 }

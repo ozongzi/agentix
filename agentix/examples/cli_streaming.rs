@@ -6,13 +6,12 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example cli_streaming
 
-use agentix::{AgentEvent, AgentInput, Node, tool};
+use agentix::{AgentEvent, tool};
 use futures::StreamExt;
 use serde_json::{Value, json};
 use std::io::{self, Write};
 use std::process::Stdio;
 use tokio::process::Command;
-use tokio::sync::mpsc;
 
 struct ShellTool;
 
@@ -42,65 +41,37 @@ impl agentix::Tool for ShellTool {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = std::env::var("DEEPSEEK_API_KEY")?;
 
-    let agent = agentix::deepseek(token)
+    let mut agent = agentix::deepseek(token)
         .system_prompt(
             "You may call shell.run(command) to execute shell commands. \
              Avoid destructive operations.",
         )
-        .tool(ShellTool)
-        .await;
+        .tool(ShellTool);
 
     println!("DeepSeek REPL (with shell tool). Ctrl+C to exit.\n");
-
-    // Use an mpsc channel to feed the agent's input stream
-    let (tx, rx) = mpsc::channel(64);
-    let mut response = agent.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
 
     let mut line = String::new();
     loop {
         print!("> ");
         io::stdout().flush()?;
         line.clear();
-        if io::stdin().read_line(&mut line)? == 0 {
-            break;
-        }
+        if io::stdin().read_line(&mut line)? == 0 { break; }
         let prompt = line.trim();
-        if prompt.is_empty() {
-            continue;
-        }
+        if prompt.is_empty() { continue; }
 
-        tx.send(AgentInput::User(vec![prompt.into()])).await?;
-
-        loop {
-            match response.next().await {
-                Some(AgentEvent::Token(t)) => {
-                    print!("{t}");
+        let mut stream = agent.chat(prompt).await?;
+        while let Some(ev) = stream.next().await {
+            match ev {
+                AgentEvent::Token(t) => { print!("{t}"); io::stdout().flush().ok(); }
+                AgentEvent::Reasoning(r) => { print!("\x1b[2m{r}\x1b[0m"); io::stdout().flush().ok(); }
+                AgentEvent::ToolCallChunk(tc) => {
+                    if tc.delta.is_empty() { print!("\n[calling {}... ", tc.name); }
+                    else { print!("{}", tc.delta); }
                     io::stdout().flush().ok();
                 }
-                Some(AgentEvent::Reasoning(r)) => {
-                    print!("\x1b[2m{r}\x1b[0m");
-                    io::stdout().flush().ok();
-                }
-                Some(AgentEvent::ToolCallChunk(tc)) => {
-                    if tc.delta.is_empty() {
-                        print!("\n[calling {}... ", tc.name);
-                    } else {
-                        print!("{}", tc.delta);
-                    }
-                    io::stdout().flush().ok();
-                }
-                Some(AgentEvent::ToolCall(_tc)) => {
-                    println!("]");
-                }
-                Some(AgentEvent::ToolResult { name, result, .. }) => {
-                    println!("[{name}] -> {result}")
-                }
-                Some(AgentEvent::Done) => break,
-                Some(AgentEvent::Error(e)) => {
-                    eprintln!("\nError: {e}");
-                    break;
-                }
-                None => break,
+                AgentEvent::ToolCall(_) => { println!("]"); }
+                AgentEvent::ToolResult { name, result, .. } => println!("[{name}] -> {result}"),
+                AgentEvent::Error(e) => { eprintln!("\nError: {e}"); break; }
                 _ => {}
             }
         }

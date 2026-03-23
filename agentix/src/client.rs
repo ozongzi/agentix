@@ -35,7 +35,12 @@ pub struct LlmClient(Arc<Inner>);
 
 impl LlmClient {
     pub fn new(provider: impl Provider + 'static, config: AgentConfig) -> Self {
-        Self::with_http(provider, reqwest::Client::new(), config)
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("failed to build HTTP client");
+        Self::with_http(provider, http, config)
     }
 
     pub fn with_http(

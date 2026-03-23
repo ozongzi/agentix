@@ -143,11 +143,10 @@ fn user_content_from_parts(parts: Vec<crate::request::UserContent>) -> UserMessa
         })
         .collect::<Vec<_>>();
 
-    if blocks.len() == 1 && matches!(blocks[0], ContentPart::Text { .. }) {
-        if let Some(ContentPart::Text { text }) = blocks.clone().into_iter().next() {
+    if blocks.len() == 1 && matches!(blocks[0], ContentPart::Text { .. })
+        && let Some(ContentPart::Text { text }) = blocks.clone().into_iter().next() {
             return UserMessageContent::Text(text);
         }
-    }
     UserMessageContent::Parts(blocks)
 }
 

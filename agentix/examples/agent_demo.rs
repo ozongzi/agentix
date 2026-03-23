@@ -3,7 +3,7 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example agent_demo
 
-use agentix::{AgentEvent, AgentInput, Node, tool};
+use agentix::{AgentEvent, tool};
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -28,32 +28,25 @@ impl agentix::Tool for WeatherTool {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set");
 
-    let agent = agentix::deepseek(token)
+    let mut agent = agentix::deepseek(token)
         .system_prompt("You are a helpful assistant.")
-        .tool(WeatherTool { client: Client::new() }).await;
+        .tool(WeatherTool { client: Client::new() });
 
-    // Create an input stream
-    let input = futures::stream::iter(vec![
-        AgentInput::User(vec!["Check the weather for Beijing and Shanghai.".into()])
-    ]).boxed();
-
-    // Run the agent and get the response stream
-    let mut response = agent.run(input);
-
-    while let Some(event) = response.next().await {
+    let mut stream = agent.chat("Check the weather for Beijing and Shanghai.").await?;
+    while let Some(event) = stream.next().await {
         match event {
-            AgentEvent::Token(t)  => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::Token(t)     => { print!("{t}"); std::io::stdout().flush().ok(); }
             AgentEvent::Reasoning(r) => { print!("\x1b[2m{r}\x1b[0m"); std::io::stdout().flush().ok(); }
-            AgentEvent::ToolCallChunk(_) => {}
             AgentEvent::ToolCall(tc) => println!("\n[calling {}({})]", tc.name, tc.arguments),
-            AgentEvent::ToolResult { name, result, .. } => println!("[{name}] → {result}"),
-            AgentEvent::Done  => break,
+            AgentEvent::ToolProgress { name, progress, .. } => eprintln!("  [tool {}] {}", name, progress),
+            AgentEvent::ToolResult { name, result, .. } => println!("[{name}] -> {result}"),
             AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
             _ => {}
         }
     }
     println!();
+    Ok(())
 }

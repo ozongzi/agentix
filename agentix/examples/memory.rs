@@ -6,44 +6,37 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example memory
 
-use agentix::{AgentEvent, AgentInput, Node, SlidingWindow};
+use agentix::{AgentEvent, SlidingWindow};
 use futures::StreamExt;
 use std::io::Write;
-use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key = std::env::var("DEEPSEEK_API_KEY").expect("DEEPSEEK_API_KEY must be set");
 
-    // SlidingWindow keeps the last 10 turns; InMemory (default) keeps all.
-    let agent = agentix::deepseek(key)
+    let mut agent = agentix::deepseek(key)
         .system_prompt("You are a helpful assistant. Keep answers brief.")
-        .memory(SlidingWindow::new(10)).await
+        .memory(SlidingWindow::new(10))
         .max_tokens(256);
-
-    let (tx, rx) = mpsc::channel(64);
-    let mut response = agent.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
 
     let turns = [
         "What is the largest planet in our solar system?",
-        "How many Earths could fit inside it?",            // references previous answer
-        "What is its most famous feature?",               // still references Jupiter
+        "How many Earths could fit inside it?",
+        "What is its most famous feature?",
         "Name one of its moons.",
-        "Is that moon larger than our Moon?",             // references previous answer
+        "Is that moon larger than our Moon?",
     ];
 
     for (i, prompt) in turns.iter().enumerate() {
         println!("Turn {}: {prompt}", i + 1);
         print!("Agent: ");
 
-        tx.send(AgentInput::User(vec![prompt.to_string().into()])).await?;
-
-        while let Some(event) = response.next().await {
+        let mut stream = agent.chat(*prompt).await?;
+        while let Some(event) = stream.next().await {
             match event {
                 AgentEvent::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
-                AgentEvent::Done     => break,
                 AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
-                _             => {}
+                _ => {}
             }
         }
         println!("\n");

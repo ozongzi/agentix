@@ -10,10 +10,11 @@
 //! Run with:
 //!   DEEPSEEK_API_KEY=sk-... cargo run --example graph
 
-use agentix::{AgentEvent, Node, PromptNode};
+use agentix::{AgentEvent, AgentNode, Node, PromptNode};
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use tokio::sync::mpsc;
+use std::sync::Arc;
 
 // ── Custom Output Parser Node ────────────────────────────────────────────────
 
@@ -56,19 +57,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          Review: {input}",
     );
 
-    let scorer = agentix::deepseek(&key)
-        .model("deepseek-chat")
-        .system_prompt("You are a sentiment scorer. Respond only with JSON: {\"score\": N}.")
-        .max_tokens(64);
+    let client = agentix::LlmClient::deepseek(&key);
+    client.model("deepseek-chat");
+    client.system_prompt("You are a sentiment scorer. Respond only with JSON: {\"score\": N}.");
+    client.max_tokens(64);
+
+    let scorer = AgentNode::new(
+        client,
+        agentix::ToolBundle::new(),
+        Box::new(agentix::InMemory::new()),
+        Arc::new(std::sync::Mutex::new(agentix::UsageStats::default())),
+    );
 
     let parser_node = OutputParserNode;
 
     // ── Wire up ───────────────────────────────────────────────────────────────
 
     let (tx, rx) = mpsc::channel::<String>(64);
-    
+
     // Chain: rx (String) -> prompt_node -> AgentInput -> scorer -> AgentEvent -> parser_node -> String
-    let prompt_stream = prompt_node.run(tokio_stream::wrappers::ReceiverStream::new(rx).boxed());
+    let prompt_stream = prompt_node.run(
+        async_stream::stream! {
+            let mut rx = rx;
+            while let Some(item) = rx.recv().await {
+                yield item;
+            }
+        }.boxed()
+    );
     let agent_stream = scorer.run(prompt_stream);
     let mut final_output = parser_node.run(agent_stream);
 
