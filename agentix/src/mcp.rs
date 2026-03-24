@@ -45,7 +45,6 @@
 //! # Ok(()) }
 //! ```
 
-use async_trait::async_trait;
 use rmcp::{
     ServiceExt,
     model::CallToolRequestParams,
@@ -152,8 +151,7 @@ pub struct McpTool {
 const DEFAULT_MAX_OUTPUT_CHARS: usize = 8_000;
 /// Default maximum content items
 const DEFAULT_MAX_CONTENT_ITEMS: usize = 50;
-/// Default call timeout
-const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
 
 impl McpTool {
     // ── Constructors ──────────────────────────────────────────────────────────
@@ -252,7 +250,7 @@ impl McpTool {
             _service: Arc::new(running),
             max_output_chars: Some(DEFAULT_MAX_OUTPUT_CHARS),
             max_content_items: Some(DEFAULT_MAX_CONTENT_ITEMS),
-            call_timeout: Some(DEFAULT_CALL_TIMEOUT),
+            call_timeout: None,
         })
     }
 
@@ -350,7 +348,7 @@ impl McpTool {
 
 // ── Tool impl ─────────────────────────────────────────────────────────────────
 
-#[async_trait]
+#[async_trait::async_trait]
 impl Tool for McpTool {
     fn raw_tools(&self) -> Vec<RawTool> {
         self.tools.clone()
@@ -365,24 +363,32 @@ impl Tool for McpTool {
             None => CallToolRequestParams::new(owned_name),
         };
 
-        let call_fut = self.peer.call_tool(params);
         let timeout_opt = self.call_timeout;
         let max_content_items = self.max_content_items;
         let max_output_chars = self.max_output_chars;
         let name_str = name.to_string();
 
-        let result_stream = async_stream::stream! {
-            let result = if let Some(timeout) = timeout_opt {
-                match tokio::time::timeout(timeout, call_fut).await {
+        // Spawn the async call into a task so the returned stream is 'static.
+        let peer = self.peer.clone();
+        let join = tokio::spawn(async move {
+            if let Some(timeout) = timeout_opt {
+                match tokio::time::timeout(timeout, peer.call_tool(params)).await {
                     Ok(res) => res,
-                    Err(_) => {
-                        error!(tool = %name_str, "MCP tool call timed out after {:?}", timeout);
-                        yield crate::tool_trait::ToolOutput::Result(serde_json::json!({ "error": format!("tool call timed out after {:?}", timeout) }));
-                        return;
-                    }
+                    Err(_) => Err(rmcp::ServiceError::Timeout { timeout }),
                 }
             } else {
-                call_fut.await
+                peer.call_tool(params).await
+            }
+        });
+
+        let result_stream = async_stream::stream! {
+            let result = match join.await {
+                Ok(r) => r,
+                Err(e) => {
+                    error!(tool = %name_str, "MCP tool call task panicked: {e}");
+                    yield crate::tool_trait::ToolOutput::Result(serde_json::json!({ "error": e.to_string() }));
+                    return;
+                }
             };
 
             match result {
@@ -399,28 +405,53 @@ impl Tool for McpTool {
                         }
                     }
 
-                    let result_value = match contents.len() {
-                        0 => serde_json::json!({ "result": null }),
-                        1 => contents.into_iter().next().unwrap(),
-                        _ => serde_json::json!({ "content": contents }),
-                    };
-
-                    if let Some(max_chars) = max_output_chars {
-                        let json_string = serde_json::to_string(&result_value).unwrap_or_default();
-                        if json_string.len() > max_chars {
-                            let mut limit = max_chars.saturating_sub(40);
-                            limit = json_string.floor_char_boundary(limit);
-                            let truncated = &json_string[..limit];
-                            yield crate::tool_trait::ToolOutput::Result(serde_json::Value::String(format!(
-                                "{}...<truncated {} chars>",
-                                truncated,
-                                json_string.len()
-                            )));
-                            return;
+                    // Emit each content item except the last as Progress so callers
+                    // can stream intermediate output; the final item is the Result.
+                    if contents.len() > 1 {
+                        let last = contents.pop().unwrap();
+                        for item in contents {
+                            let text = serde_json::to_string(&item).unwrap_or_default();
+                            yield crate::tool_trait::ToolOutput::Progress(text);
                         }
-                    }
+                        let result_value = last;
+                        if let Some(max_chars) = max_output_chars {
+                            let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                            if json_string.len() > max_chars {
+                                let mut limit = max_chars.saturating_sub(40);
+                                limit = json_string.floor_char_boundary(limit);
+                                let truncated = &json_string[..limit];
+                                yield crate::tool_trait::ToolOutput::Result(serde_json::Value::String(format!(
+                                    "{}...<truncated {} chars>",
+                                    truncated,
+                                    json_string.len()
+                                )));
+                                return;
+                            }
+                        }
+                        yield crate::tool_trait::ToolOutput::Result(result_value);
+                    } else {
+                        let result_value = match contents.len() {
+                            0 => serde_json::json!({ "result": null }),
+                            _ => contents.into_iter().next().unwrap(),
+                        };
 
-                    yield crate::tool_trait::ToolOutput::Result(result_value);
+                        if let Some(max_chars) = max_output_chars {
+                            let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                            if json_string.len() > max_chars {
+                                let mut limit = max_chars.saturating_sub(40);
+                                limit = json_string.floor_char_boundary(limit);
+                                let truncated = &json_string[..limit];
+                                yield crate::tool_trait::ToolOutput::Result(serde_json::Value::String(format!(
+                                    "{}...<truncated {} chars>",
+                                    truncated,
+                                    json_string.len()
+                                )));
+                                return;
+                            }
+                        }
+
+                        yield crate::tool_trait::ToolOutput::Result(result_value);
+                    }
                 }
                 Err(e) => {
                     error!(tool = %name_str, error = %e, "MCP tool call failed");

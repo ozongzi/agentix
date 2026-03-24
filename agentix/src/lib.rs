@@ -74,7 +74,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub mod client;
 pub mod config;
 pub mod error;
-pub mod markers;
 pub mod memory;
 pub mod msg;
 pub mod provider;
@@ -83,8 +82,6 @@ pub mod request;
 pub mod tool_trait;
 pub mod types;
 pub mod agent;
-pub mod context;
-pub mod node;
 
 #[cfg(feature = "mcp")]
 pub mod mcp;
@@ -93,7 +90,7 @@ pub mod mcp_server;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-pub use agent::{Agent, AgentNode};
+pub use agent::Agent;
 pub use client::LlmClient;
 pub use config::AgentConfig;
 pub use error::ApiError;
@@ -101,8 +98,6 @@ pub use memory::{InMemory, Memory, SlidingWindow, TokenSlidingWindow, LlmSummari
 pub use msg::{CustomEvent, LlmEvent, AgentEvent, AgentInput};
 pub use provider::{AnthropicProvider, DeepSeekProvider, GeminiProvider, OpenAIProvider, Provider};
 pub use request::{ImageContent, ImageData, Message, Request, ResponseFormat, ToolChoice, UserContent, ToolCall};
-pub use context::SharedContext;
-pub use node::{Node, TapNode, PromptNode};
 pub use types::UsageStats;
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
 

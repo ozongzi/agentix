@@ -51,19 +51,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         sleep(Duration::from_millis(500)).await;
         println!("\n[queuing follow-up]\n");
-        tx2.send(AgentInput::User(vec!["Also tell me the square of that number.".into()]))
-            .await.ok();
+        tx2.send(AgentInput::User(vec![
+            "Also tell me the square of that number.".into(),
+        ]))
+        .await
+        .ok();
     });
 
     let mut rx = agent.subscribe();
     while let Some(event) = rx.next().await {
         match event {
-            AgentEvent::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::Token(t) => {
+                print!("{t}");
+                std::io::stdout().flush().ok();
+            }
             AgentEvent::ToolCall(tc) => println!("\n[calling {}]", tc.name),
-            AgentEvent::ToolProgress { name, progress, .. } => eprintln!("  [tool {}] {}", name, progress),
+            AgentEvent::ToolProgress { name, progress, .. } => {
+                eprintln!("  [tool {}] {}", name, progress)
+            }
             AgentEvent::ToolResult { name, result, .. } => println!("[{name}] -> {result}"),
-            AgentEvent::Done => { println!("\n--- turn done ---"); break; }
-            AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
+            AgentEvent::Done => {
+                println!("\n--- turn done ---");
+                break;
+            }
+            AgentEvent::Error(e) => {
+                eprintln!("Error: {e}");
+                break;
+            }
             _ => {}
         }
     }
@@ -81,7 +95,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rx = agent.subscribe();
     while let Some(event) = rx.next().await {
         match event {
-            AgentEvent::Token(t) => { print!("{t}"); std::io::stdout().flush().ok(); }
+            AgentEvent::Token(t) => {
+                print!("{t}");
+                std::io::stdout().flush().ok();
+            }
             AgentEvent::ToolCall(tc) => println!("\n[calling {}]", tc.name),
             AgentEvent::ToolProgress { name, progress, .. } => {
                 eprintln!("  [tool {}] {}", name, progress);
@@ -90,7 +107,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tx3.send(AgentInput::Abort).await.ok();
                 }
             }
-            AgentEvent::Done => { println!("\n--- turn aborted ---"); break; }
+            AgentEvent::Done => {
+                println!("\n--- turn aborted ---");
+                break;
+            }
             _ => {}
         }
     }

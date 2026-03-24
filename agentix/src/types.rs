@@ -35,16 +35,6 @@ pub struct ToolCallChunk {
     pub index: u32,
 }
 
-/// Raw event fragments produced by individual provider implementations.
-/// These are mapped to public events in `src/msg.rs`.
-#[derive(Debug, Clone)]
-pub enum ProtocolEvent {
-    Token(String),
-    Reasoning(String),
-    ToolCallChunk(ToolCallChunk),
-    Usage(UsageStats),
-}
-
 // ── Streaming accumulator ─────────────────────────────────────────────────────
 
 /// Accumulates a single tool-call's incremental SSE deltas until the stream ends.
@@ -79,57 +69,3 @@ impl Default for StreamBufs {
     }
 }
 
-// ── ProviderProtocol ─────────────────────────────────────────────────────────
-
-/// Implemented by provider marker types (`OpenAI`, `Anthropic`, `Gemini`).
-/// Connects the generic agent machinery to provider-specific wire formats.
-pub trait ProviderProtocol: Send + Sync + Unpin + 'static {
-    /// The serialisable request body sent to the provider.
-    type RawRequest: serde::Serialize + Send + Sync;
-    /// The deserialised non-streaming response body.
-    type RawResponse: for<'de> serde::Deserialize<'de> + Send + Sync;
-    /// A single deserialised streaming chunk / event.
-    type RawChunk: for<'de> serde::Deserialize<'de> + Send + Sync;
-
-    /// Convert a provider-agnostic `AgentRequest` into the provider's wire format.
-    fn build_raw(req: crate::request::Request) -> Self::RawRequest;
-
-    /// Parse a complete response into internal protocol events and tool calls.
-    fn parse_response(raw: Self::RawResponse) -> (Vec<ProtocolEvent>, Vec<crate::request::ToolCall>);
-
-    /// Apply a single streaming chunk to the accumulator buffers and return
-    /// any events to yield immediately.
-    fn parse_chunk(chunk: Self::RawChunk, bufs: &mut StreamBufs) -> Vec<ProtocolEvent>;
-
-    /// Assemble complete tool calls from the accumulated buffers and return them.
-    fn finalize_stream(bufs: &mut StreamBufs) -> Vec<crate::request::ToolCall>;
-
-    /// Return the URL suffix for this provider's completions endpoint.
-    fn url_suffix(model: &str, streaming: bool) -> String {
-        let _ = (model, streaming);
-        "/chat/completions".to_string()
-    }
-
-    /// Extra HTTP headers sent with every request.
-    fn extra_headers() -> &'static [(&'static str, &'static str)] {
-        &[]
-    }
-
-    /// If `Some(name)`, the token is sent as the given header.
-    fn auth_header_name() -> Option<&'static str> {
-        None
-    }
-
-    /// If `true`, the token is appended as `?key=TOKEN`.
-    fn uses_query_key_auth() -> bool {
-        false
-    }
-
-    /// Provider-specific history preparation.
-    fn prepare_history(messages: Vec<crate::request::Message>) -> Vec<crate::request::Message> {
-        messages
-    }
-
-    /// Default base URL for this provider.
-    fn default_base_url() -> &'static str;
-}

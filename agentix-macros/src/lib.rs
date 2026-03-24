@@ -111,8 +111,8 @@ struct ParamInfo {
 ///
 /// ## Streaming methods — add `#[streaming]` on the method
 ///
-/// Write the body with plain `yield` expressions. No return type needed.
-/// The macro wraps it in `async_stream::stream!` automatically.
+/// The body must evaluate to a `Stream<Item = ToolOutput>`. Use `async_stream::stream!`
+/// and `yield` inside it. The macro calls `.boxed()` on the returned stream.
 ///
 /// ```ignore
 /// #[tool]
@@ -121,10 +121,12 @@ struct ParamInfo {
 ///     /// n: upper bound
 ///     #[streaming]
 ///     fn count_to(&self, n: u32) {
-///         for i in 1..=n {
-///             yield agentix::ToolOutput::Progress(format!("{i}/{n}"));
+///         async_stream::stream! {
+///             for i in 1..=n {
+///                 yield agentix::ToolOutput::Progress(format!("{i}/{n}"));
+///             }
+///             yield agentix::ToolOutput::Result(agentix::serde_json::json!({ "final": n }));
 ///         }
-///         yield agentix::ToolOutput::Result(agentix::serde_json::json!({ "final": n }));
 ///     }
 /// }
 /// ```
@@ -210,6 +212,13 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
                 }
             }
         }
+
+        impl<T: agentix::tool_trait::Tool + 'static> std::ops::Add<T> for #struct_ident {
+            type Output = agentix::tool_trait::ToolBundle;
+            fn add(self, rhs: T) -> Self::Output {
+                agentix::tool_trait::ToolBundle::new() + self + rhs
+            }
+        }
     };
 
     expanded.into()
@@ -290,6 +299,13 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                         agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed()
                     }
                 }
+            }
+        }
+
+        impl<T: agentix::tool_trait::Tool + 'static> std::ops::Add<T> for #self_ty {
+            type Output = agentix::tool_trait::ToolBundle;
+            fn add(self, rhs: T) -> Self::Output {
+                agentix::tool_trait::ToolBundle::new() + self + rhs
             }
         }
     };
@@ -374,12 +390,14 @@ fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
     });
 
     if method.streaming {
-        // Wrap body in async_stream::stream! — user writes plain `yield` expressions.
+        // The method body must evaluate to a Stream. The user writes:
+        //   async_stream::stream! { ... yield ToolOutput::... ... }
+        // and we call .boxed() on the result.
         quote! {
             #tool_name => {
                 use agentix::futures::StreamExt;
                 #(#arg_parses)*
-                let __stream = async_stream::stream! { #body };
+                let __stream = #body;
                 __stream.boxed()
             }
         }
@@ -387,6 +405,8 @@ fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
         quote! {
             #tool_name => {
                 use agentix::futures::StreamExt;
+                #[allow(unused_imports)]
+                use agentix::serde_json::Value;
                 #(#arg_parses)*
 
                 let __result = (async move || #output { #body })().await;

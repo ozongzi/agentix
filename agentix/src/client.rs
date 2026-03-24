@@ -110,10 +110,8 @@ impl LlmClient {
 impl LlmClient {
     pub fn deepseek(token: impl Into<String>) -> Self {
         use crate::provider::DeepSeekProvider;
-        use crate::markers::DeepSeek;
-        use crate::types::ProviderProtocol;
         let config = AgentConfig {
-            base_url: DeepSeek::default_base_url().to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
             model:    "deepseek-chat".to_string(),
             ..Default::default()
         };
@@ -122,10 +120,8 @@ impl LlmClient {
 
     pub fn openai(token: impl Into<String>) -> Self {
         use crate::provider::OpenAIProvider;
-        use crate::markers::OpenAI;
-        use crate::types::ProviderProtocol;
         let config = AgentConfig {
-            base_url: OpenAI::default_base_url().to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
             model:    "gpt-4o".to_string(),
             ..Default::default()
         };
@@ -134,10 +130,8 @@ impl LlmClient {
 
     pub fn anthropic(token: impl Into<String>) -> Self {
         use crate::provider::AnthropicProvider;
-        use crate::markers::Anthropic;
-        use crate::types::ProviderProtocol;
         let config = AgentConfig {
-            base_url: Anthropic::default_base_url().to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
             model:    "claude-opus-4-5".to_string(),
             ..Default::default()
         };
@@ -146,13 +140,34 @@ impl LlmClient {
 
     pub fn gemini(token: impl Into<String>) -> Self {
         use crate::provider::GeminiProvider;
-        use crate::markers::Gemini;
-        use crate::types::ProviderProtocol;
         let config = AgentConfig {
-            base_url: Gemini::default_base_url().to_string(),
+            base_url: "https://generativelanguage.googleapis.com/v1beta".to_string(),
             model:    "gemini-2.0-flash".to_string(),
             ..Default::default()
         };
         Self::new(GeminiProvider::new(token), config)
+    }
+
+    /// Build a client from plain string parts — useful when provider/key/url/model
+    /// come from an external config struct without importing agentix provider types.
+    ///
+    /// `provider` must be one of: `"deepseek"`, `"openai"`, `"anthropic"`, `"gemini"`.
+    /// Falls back to DeepSeek for unrecognised values.
+    pub fn from_parts(
+        provider: impl AsRef<str>,
+        api_key:  impl Into<String>,
+        base_url: impl Into<String>,
+        model:    impl Into<String>,
+    ) -> Self {
+        let key = api_key.into();
+        let client = match provider.as_ref() {
+            "openai"    => Self::openai(key),
+            "anthropic" => Self::anthropic(key),
+            "gemini"    => Self::gemini(key),
+            _           => Self::deepseek(key),
+        };
+        client.base_url(base_url);
+        client.model(model);
+        client
     }
 }

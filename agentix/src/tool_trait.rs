@@ -106,6 +106,12 @@ impl ToolBundle {
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
+
+    /// Remove all tools from this bundle.
+    pub fn clear(&mut self) {
+        self.tools.clear();
+        self.index.clear();
+    }
 }
 
 #[async_trait]
@@ -116,14 +122,12 @@ impl Tool for ToolBundle {
 
     async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput> {
         use futures::StreamExt;
-        
+
         // Fast path: direct index lookup (covers tools registered at this level).
         if let Some(&idx) = self.index.get(name) {
             return self.tools[idx].call(name, args).await;
         }
-        // Slow path: the name wasn't in the index, which can happen when a
-        // nested ToolBundle was pushed (its children aren't individually indexed
-        // at this level).  Ask each child that declares the name.
+        // Slow path: nested ToolBundle whose children aren't indexed at this level.
         for tool in &self.tools {
             if tool.raw_tools().iter().any(|r| r.function.name == name) {
                 return tool.call(name, args).await;
@@ -139,6 +143,12 @@ impl<T: Tool + 'static> std::ops::Add<T> for ToolBundle {
 
     fn add(self, rhs: T) -> Self::Output {
         ToolBundle::with(self, rhs)
+    }
+}
+
+impl<T: Tool + 'static> std::iter::Sum<T> for ToolBundle {
+    fn sum<I: Iterator<Item = T>>(iter: I) -> Self {
+        iter.fold(ToolBundle::new(), |b, t| b + t)
     }
 }
 
