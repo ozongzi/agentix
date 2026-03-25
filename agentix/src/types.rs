@@ -24,6 +24,21 @@ impl std::ops::AddAssign for UsageStats {
     }
 }
 
+// ── Non-streaming response ────────────────────────────────────────────────────
+
+/// The result of a non-streaming (complete) API call.
+#[derive(Debug, Clone, Default)]
+pub struct CompleteResponse {
+    /// The text content produced by the model (may be empty if only tool calls).
+    pub content: Option<String>,
+    /// Chain-of-thought / reasoning text, if any.
+    pub reasoning: Option<String>,
+    /// Tool calls requested by the model.
+    pub tool_calls: Vec<crate::request::ToolCall>,
+    /// Token usage statistics.
+    pub usage: UsageStats,
+}
+
 // ── Internal provider events ──────────────────────────────────────────────────
 
 /// A tool call fragment emitted during a streaming turn.

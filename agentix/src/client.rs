@@ -8,6 +8,7 @@ use crate::msg::LlmEvent;
 use crate::provider::Provider;
 use crate::raw::shared::ToolDefinition;
 use crate::request::Message;
+use crate::types::CompleteResponse;
 
 // ── LlmClient ─────────────────────────────────────────────────────────────────
 
@@ -23,9 +24,8 @@ struct Inner {
 /// a `config` change on any clone is visible to all others immediately.
 ///
 /// # Configuration
-/// Call the setter methods (`model`, `base_url`, etc.) at any time — before
-/// or after the first [`Agent`][crate::Agent] is built.  Each change takes
-/// effect on the **next** API request.
+/// Call the setter methods (`model`, `base_url`, etc.) at any time.
+/// Each change takes effect on the **next** API request.
 ///
 /// # Custom HTTP client
 /// Pass your own `reqwest::Client` (with timeouts, proxies, etc.) via
@@ -95,13 +95,26 @@ impl LlmClient {
 
     // ── Stream ────────────────────────────────────────────────────────────────
 
-    pub(crate) async fn stream(
+    pub async fn stream(
         &self,
         messages: &[Message],
         tools:    &[ToolDefinition],
     ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
         let config = self.0.config.read().unwrap().clone();
         self.0.provider.stream(&self.0.http, &config, messages, tools).await
+    }
+
+    // ── Complete (non-streaming) ──────────────────────────────────────────────
+
+    /// Non-streaming completion — sends `stream: false` to the underlying
+    /// provider and returns the full response in one shot.
+    pub async fn complete(
+        &self,
+        messages: &[Message],
+        tools:    &[ToolDefinition],
+    ) -> Result<CompleteResponse, ApiError> {
+        let config = self.0.config.read().unwrap().clone();
+        self.0.provider.complete(&self.0.http, &config, messages, tools).await
     }
 }
 

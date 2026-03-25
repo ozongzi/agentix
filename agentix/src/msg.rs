@@ -1,12 +1,5 @@
-use crate::request::{ToolCall, UserContent};
+use crate::request::ToolCall;
 use crate::types::UsageStats;
-use serde_json::Value;
-use std::sync::Arc;
-
-/// Trait for custom payloads carried in events.
-pub trait CustomEvent: std::fmt::Debug + Send + Sync + 'static {
-    fn as_any(&self) -> &dyn std::any::Any;
-}
 
 // ── LLM Provider Events ──────────────────────────────────────────────────────
 
@@ -27,66 +20,4 @@ pub enum LlmEvent {
     Done,
     /// A provider-level error.
     Error(String),
-}
-
-// ── Agent Events ─────────────────────────────────────────────────────────────
-
-/// Events emitted by an Agent node.
-///
-/// This is what the outside world or an orchestrator sees.
-#[derive(Debug, Clone)]
-pub enum AgentEvent {
-    /// Incremental response tokens.
-    Token(String),
-    /// Reasoning tokens.
-    Reasoning(String),
-    /// A fragment of a tool call being generated (useful for real-time UI).
-    ToolCallChunk(crate::types::ToolCallChunk),
-    /// The agent is calling a tool.
-    ToolCall(ToolCall),
-    /// A tool is reporting progress or streaming intermediate output.
-    ToolProgress {
-        call_id: String,
-        name: String,
-        progress: String,
-    },
-    /// A tool has finished, here is the result.
-    ToolResult {
-        call_id: String,
-        name: String,
-        result: Value,
-    },
-    /// Accumulated usage for the turn.
-    Usage(UsageStats),
-    /// The current interaction turn is complete.
-    Done,
-    /// An error occurred.
-    Error(String),
-    /// Extensibility point.
-    Custom(Arc<dyn CustomEvent>),
-}
-
-// ── Agent Inputs ─────────────────────────────────────────────────────────────
-
-/// Inputs accepted by an Agent node.
-#[derive(Debug, Clone)]
-pub enum AgentInput {
-    /// A new message from the user.
-    User(Vec<UserContent>),
-    /// The result of a tool execution.
-    ToolResult { call_id: String, result: Value },
-    /// Hard stop: stop current LLM stream immediately.
-    Abort,
-}
-
-impl From<&str> for AgentInput {
-    fn from(s: &str) -> Self {
-        AgentInput::User(vec![s.into()])
-    }
-}
-
-impl From<String> for AgentInput {
-    fn from(s: String) -> Self {
-        AgentInput::User(vec![s.into()])
-    }
 }

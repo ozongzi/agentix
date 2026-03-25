@@ -1,43 +1,41 @@
 # agentix
 
-[![crates.io](https://img.shields.io/crates/v/agentix.svg)](https://crates.io/crates/agentix)
-[![docs.rs](https://img.shields.io/docsrs/agentix)](https://docs.rs/agentix)
-[![license](https://img.shields.io/crates/l/agentix.svg)](https://github.com/ozongzi/agentix/blob/main/LICENSE-MIT)
+Stateless, multi-provider LLM client for Rust — streaming, non-streaming, tool calls, and MCP support.
 
-A Rust framework for building LLM agents and multi-agent pipelines. Supports DeepSeek, OpenAI, Anthropic (Claude), and Google Gemini out of the box — plus any OpenAI-compatible endpoint.
+DeepSeek · OpenAI · Anthropic · Gemini — one unified API.
 
-Built on a **pure stream-based architecture**. Agents and nodes are stream transformers ([`Node`](#nodes--composition)) that can be easily chained to build complex, branching, and looping workflows using native Rust control flow.
-
----
-
-## Quickstart
-
-```bash
-export DEEPSEEK_API_KEY="sk-..."
-```
+## Installation
 
 ```toml
 [dependencies]
-agentix = "0.5"
-tokio   = { version = "1", features = ["full"] }
-futures = "0.3"
+agentix = "0.7"
+
+# Optional: Model Context Protocol (MCP) tool support
+# agentix = { version = "0.7", features = ["mcp"] }
 ```
 
+---
+
+## Quick Start
+
 ```rust
-use agentix::AgentEvent;
+use agentix::{LlmClient, LlmEvent, Message, UserContent};
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut agent = agentix::deepseek(std::env::var("DEEPSEEK_API_KEY")?)
-        .system_prompt("You are a helpful assistant.");
+    let client = LlmClient::deepseek(std::env::var("DEEPSEEK_API_KEY")?);
+    client.system_prompt("You are a helpful assistant.");
 
-    let mut stream = agent.chat("What is the capital of France?").await?;
+    let messages = vec![
+        Message::User(vec![UserContent::Text("What is the capital of France?".into())]),
+    ];
+    let mut stream = client.stream(&messages, &[]).await?;
 
     while let Some(event) = stream.next().await {
         match event {
-            AgentEvent::Token(t) => print!("{t}"),
-            AgentEvent::Error(e) => { eprintln!("Error: {e}"); break; }
+            LlmEvent::Token(t) => print!("{t}"),
+            LlmEvent::Done     => break,
             _ => {}
         }
     }
@@ -50,112 +48,90 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Providers
 
-Four built-in providers, all using the same builder API:
+Four built-in providers, all using the same API:
 
 ```rust
+use agentix::LlmClient;
+
 // DeepSeek  (default model: deepseek-chat)
-let mut agent = agentix::deepseek("sk-...");
+let client = LlmClient::deepseek("sk-...");
 
 // OpenAI  (default model: gpt-4o)
-let mut agent = agentix::openai("sk-...");
+let client = LlmClient::openai("sk-...");
 
 // Anthropic / Claude  (default model: claude-opus-4-5)
-let mut agent = agentix::anthropic("sk-ant-...");
+let client = LlmClient::anthropic("sk-ant-...");
 
 // Gemini  (default model: gemini-2.0-flash)
-let mut agent = agentix::gemini("AIza...");
+let client = LlmClient::gemini("AIza...");
 
 // Any OpenAI-compatible endpoint (e.g. OpenRouter)
-let mut agent = agentix::openai("sk-or-...")
-    .base_url("https://openrouter.ai/api/v1")
-    .model("openrouter/free");
+let client = LlmClient::openai("sk-or-...");
+client.base_url("https://openrouter.ai/api/v1");
+client.model("openrouter/free");
+
+// From config strings (useful for dynamic provider selection)
+let client = LlmClient::from_parts("openai", "sk-...", "https://api.openai.com/v1", "gpt-4o");
 ```
 
 ---
 
-## Agent API
+## LlmClient API
 
-`Agent` is the primary entry point. It lazily starts an internal runtime on first use.
+[`LlmClient`] is stateless — the caller owns message history and tool dispatch.
+All clones share the same config and HTTP connection pool.
 
-### `chat()` — one-shot, lazy stream
-
-Sends a message and returns a stream of events for **this turn only**. The stream ends when `Done` is emitted.
+### `stream()` — streaming completion
 
 ```rust
-let mut stream = agent.chat("Summarise the Rust book.").await?;
-while let Some(ev) = stream.next().await {
-    match ev {
-        AgentEvent::Token(t) => print!("{t}"),
-        AgentEvent::Done     => break,
-        _ => {}
+let mut stream = client.stream(&messages, &tool_defs).await?;
+while let Some(event) = stream.next().await {
+    match event {
+        LlmEvent::Token(t)         => print!("{t}"),
+        LlmEvent::Reasoning(r)     => print!("[think] {r}"),
+        LlmEvent::ToolCall(tc)     => println!("tool: {}({})", tc.name, tc.arguments),
+        LlmEvent::Usage(u)         => println!("tokens: {}", u.total_tokens),
+        LlmEvent::Error(e)         => eprintln!("error: {e}"),
+        LlmEvent::Done             => break,
+        _                          => {}
     }
 }
 ```
 
-### `send()` + `subscribe()` — fire-and-forget / multi-consumer
-
-`send()` dispatches a message without waiting. `subscribe()` returns a continuous `BoxStream` that receives **all** future events and never stops at `Done`. Both `&str`/`String` and raw `AgentInput` values are accepted by `send()`.
+### `complete()` — non-streaming completion
 
 ```rust
-use agentix::AgentInput;
-
-// Send a user message
-agent.send("Follow-up question").await?;
-
-// Send an abort signal
-agent.send(AgentInput::Abort).await?;
-
-// Subscribe to the raw event stream
-let mut rx = agent.subscribe();
-while let Some(ev) = rx.next().await {
-    if matches!(ev, AgentEvent::Done) { break; }
-}
+let resp = client.complete(&messages, &[]).await?;
+println!("{}", resp.content.unwrap_or_default());
+println!("reasoning: {:?}", resp.reasoning);
+println!("tool_calls: {:?}", resp.tool_calls);
+println!("usage: {:?}", resp.usage);
 ```
 
-### `sender()` — share the channel with spawned tasks
+### Configuration
 
 ```rust
-let tx = agent.sender(); // mpsc::Sender<AgentInput>
-tokio::spawn(async move {
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    tx.send(AgentInput::Abort).await.ok();
-});
-```
+client.model("deepseek-reasoner");
+client.base_url("https://custom.api/v1");
+client.system_prompt("You are helpful.");
+client.max_tokens(4096);
+client.temperature(0.7);
 
-### `add_tool()` — add tools at runtime
-
-```rust
-// Before first use (builder-style)
-let mut agent = agentix::deepseek("sk-...").tool(MyTool);
-
-// After first use (async, takes effect immediately)
-agent.add_tool(AnotherTool).await;
-```
-
-### `usage()` — token accounting
-
-```rust
-println!("{:?}", agent.usage()); // UsageStats { prompt_tokens, completion_tokens, ... }
+// Read current config
+let snap = client.snapshot();
 ```
 
 ---
 
-## Events — The Communication Layer
+## LlmEvent (what you receive from `stream()`)
 
-### `AgentInput` (what you send)
-- `User(Vec<UserContent>)` — new conversation turn (also `From<&str>` / `From<String>`)
-- `ToolResult { call_id, result }` — provide a tool execution result
-- `Abort` — immediately stop current processing
-
-### `AgentEvent` (what you receive)
 - `Token(String)` — incremental response text
 - `Reasoning(String)` — thinking/reasoning trace (e.g. DeepSeek-R1)
-- `ToolCall(ToolCall)` — model wants to call a tool
-- `ToolProgress { name, progress, .. }` — streaming tool output
-- `ToolResult { name, result, .. }` — tool finished
-- `Usage(UsageStats)` — token usage for this turn
-- `Done` — turn complete
-- `Error(String)` — an error occurred
+- `ToolCallChunk(ToolCallChunk)` — partial tool call for real-time UI
+- `ToolCall(ToolCall)` — completed tool call
+- `Usage(UsageStats)` — token usage for the turn
+- `Done` — stream ended
+- `Error(String)` — provider error
 
 ---
 
@@ -165,7 +141,7 @@ Annotate `impl Tool for YourStruct` with `#[tool]`. Each method becomes a callab
 
 ```rust
 use agentix::tool;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 struct Calculator;
 
@@ -183,8 +159,6 @@ impl agentix::Tool for Calculator {
         if b == 0.0 { Err("division by zero".into()) } else { Ok(a / b) }
     }
 }
-
-let mut agent = agentix::deepseek("sk-...").tool(Calculator);
 ```
 
 - Doc comment → tool description
@@ -193,7 +167,7 @@ let mut agent = agentix::deepseek("sk-...").tool(Calculator);
 
 ### Streaming tools
 
-Add `#[streaming]` to a method inside `#[tool]`. No return type annotation needed — the macro infers it. Use `async_stream::stream!` in the body for `yield` syntax.
+Add `#[streaming]` to yield `ToolOutput::Progress` / `ToolOutput::Result` incrementally:
 
 ```rust
 use agentix::{tool, ToolOutput};
@@ -220,50 +194,6 @@ Normal and streaming methods can be freely mixed in the same `#[tool]` block.
 
 ---
 
-## Memory & Context
-
-```rust
-use agentix::{SlidingWindow, TokenSlidingWindow, LlmSummarizer};
-
-// Keep the last N turns
-let mut agent = agentix::deepseek("sk-...").memory(SlidingWindow::new(20));
-
-// Keep up to N tokens of history
-let mut agent = agentix::deepseek("sk-...").memory(TokenSlidingWindow::new(4000));
-
-// Auto-summarise old messages with the LLM when exceeding N tokens
-let mut agent = agentix::deepseek("sk-...").memory(LlmSummarizer::new(client, 8000));
-```
-
----
-
-## Nodes & Composition
-
-For advanced multi-agent pipelines, use [`AgentNode`] (a raw stream transformer) and compose it with other [`Node`]s.
-
-```rust
-use agentix::{Node, AgentNode, PromptNode};
-
-let prompt_node = PromptNode::new("Summarise in one sentence: {input}");
-
-// Chain: String -> PromptNode -> AgentInput -> AgentNode -> AgentEvent
-let input = futures::stream::iter(vec!["Long article...".to_string()]).boxed();
-let agent_input = prompt_node.run(input);
-let mut output = scorer_node.run(agent_input);
-```
-
----
-
-## Reliability
-
-- **Automatic retries** — exponential backoff for 429 / 5xx responses
-- **HTTP timeouts** — 10 s connect, 120 s response (overridable via `Agent::with_http`)
-- **Concurrent tool execution** — multiple tool calls in one turn run in parallel
-- **Safe memory truncation** — `SlidingWindow` never splits `tool_call` / `tool_result` pairs
-- **Usage tracking** — per-turn and cumulative token accounting across all providers
-
----
-
 ## MCP Tools
 
 Use external processes as tools via the Model Context Protocol:
@@ -275,40 +205,52 @@ use std::time::Duration;
 let tool = McpTool::stdio("npx", &["-y", "@playwright/mcp"]).await?
     .with_timeout(Duration::from_secs(60));
 
-let mut agent = agentix::deepseek("sk-...").tool(tool);
+// Add to a ToolBundle alongside regular tools
+let mut bundle = agentix::ToolBundle::new();
+bundle.push(tool);
 ```
+
+---
+
+## Reliability
+
+- **Automatic retries** — exponential backoff for 429 / 5xx responses
+- **HTTP timeouts** — 10 s connect, 120 s response (overridable via `LlmClient::with_http`)
+- **Usage tracking** — per-request token accounting across all providers
 
 ---
 
 ## Changelog
 
+### 0.7.0
+
+- **Removed `Agent` struct** — `LlmClient` is now the sole entry point; callers own the loop
+- **Removed `Memory` trait** — `InMemory`, `SlidingWindow`, `TokenSlidingWindow`, `LlmSummarizer` removed
+- **Removed `AgentEvent` / `AgentInput`** — only `LlmEvent` remains
+- **New `LlmClient::complete()`** — native non-streaming API for all four providers
+- **New `CompleteResponse`** — content, reasoning, tool_calls, usage in one struct
+
+### 0.6.0
+
+- Non-streaming `complete()` method on `Provider` trait
+- `post_json` helper for non-streaming HTTP POST with retry
+- `CompleteResponse` type
+
 ### 0.5.0
 
-- **New `Agent` API** — `chat()`, `send()`, `subscribe()`, `sender()`, `add_tool()`, `abort()`, `usage()`
-  - `chat(text)` returns a lazy `BoxStream` (ends at `Done`), backed by `tokio::broadcast`
-  - `send(input)` accepts `&str`, `String`, or `AgentInput` directly (`From` impls)
-  - `subscribe()` returns a continuous `BoxStream` that never stops at `Done`
-  - `add_tool()` inserts tools into the live registry after the runtime has started
-- **Concurrent tool execution** — multiple tool calls in a single turn now run via `FuturesUnordered`
-- **`SlidingWindow` fix** — truncation now skips orphaned `ToolResult` / `tool_call` messages to avoid malformed histories
-- **`LlmSummarizer` fix** — summary is injected as a `user`/`assistant` pair, satisfying strict alternating-role providers (Anthropic, Gemini)
-- **`estimate_tokens` fix** — BPE tokeniser is now initialised once via `OnceLock` instead of being rebuilt on every call
-- **Default HTTP timeouts** — 10 s connect timeout, 120 s response timeout
-- **Removed** `Session` abstraction — `Agent` manages the runtime directly
+- `Agent` API with `chat()`, `send()`, `subscribe()`, `add_tool()`, `abort()`, `usage()`
+- Concurrent tool execution via `FuturesUnordered`
+- `SlidingWindow` fix for orphaned tool messages
+- Default HTTP timeouts (10 s connect, 120 s response)
 
 ### 0.4.x
 
-- Initial `Session`-based multi-turn API
+- Initial multi-turn API
 - DeepSeek, OpenAI, Anthropic, Gemini providers
-- `#[tool]` and `#[streaming_tool]` macros
-- Memory backends: `InMemory`, `SlidingWindow`, `TokenSlidingWindow`, `LlmSummarizer`
-- MCP tool support
+- `#[tool]` and `#[streaming]` macros
+- Memory backends, MCP tool support
 
 ---
-
-## Contributing
-
-PRs welcome. Built with 🦀 in Rust.
 
 ## License
 

@@ -9,10 +9,10 @@ use tracing::debug;
 use crate::config::AgentConfig;
 use crate::error::ApiError;
 use crate::msg::LlmEvent;
-use crate::provider::{Provider, PostConfig, post_streaming};
+use crate::provider::{Provider, PostConfig, post_streaming, post_json};
 use crate::request::{Message, Request, ToolCall, ToolChoice};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
 use request::Request as GeminiRequest;
 use response::Response;
@@ -79,6 +79,70 @@ impl Provider for GeminiProvider {
             for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
             yield LlmEvent::Done;
         }.boxed())
+    }
+
+    async fn complete(
+        &self,
+        http:     &reqwest::Client,
+        config:   &AgentConfig,
+        messages: &[Message],
+        tools:    &[ToolDefinition],
+    ) -> Result<CompleteResponse, ApiError> {
+        let tool_choice = if tools.is_empty() { None } else { Some(ToolChoice::Auto) };
+        let req = GeminiRequest::from(Request {
+            system_message:  config.system_prompt.clone(),
+            messages:        messages.to_vec(),
+            model:           config.model.clone(),
+            tools:           if tools.is_empty() { None } else { Some(tools.to_vec()) },
+            tool_choice,
+            stream:          false,
+            temperature:     config.temperature,
+            max_tokens:      config.max_tokens,
+            response_format: None,
+            extra_body:      if config.extra_body.is_empty() { None } else { Some(config.extra_body.clone()) },
+        });
+
+        let url = format!(
+            "{}/models/{}:generateContent",
+            config.base_url.trim_end_matches('/'),
+            config.model,
+        );
+
+        let body = post_json(http, &url, &req, &self.token, &PostConfig {
+            use_query_key:  true,
+            auth_header:    None,
+            extra_headers:  &[],
+            max_retries:    config.max_retries,
+            retry_delay_ms: config.retry_delay_ms,
+        }).await?;
+
+        let raw: Response = serde_json::from_str(&body)
+            .map_err(ApiError::Json)?;
+
+        let mut content_buf = String::new();
+        let mut tool_calls = Vec::new();
+
+        if let Some(candidate) = raw.candidates.and_then(|mut c| if c.is_empty() { None } else { Some(c.remove(0)) }) {
+            for part in candidate.content.parts {
+                if let Some(t) = part.text.filter(|s| !s.is_empty()) {
+                    content_buf.push_str(&t);
+                }
+                if let Some(fc) = part.function_call {
+                    tool_calls.push(ToolCall {
+                        id: fc.name.clone(),
+                        name: fc.name,
+                        arguments: serde_json::to_string(&fc.args).unwrap_or_default(),
+                    });
+                }
+            }
+        }
+
+        Ok(CompleteResponse {
+            content: if content_buf.is_empty() { None } else { Some(content_buf) },
+            reasoning: None,
+            tool_calls,
+            usage: raw.usage_metadata.map(UsageStats::from).unwrap_or_default(),
+        })
     }
 }
 

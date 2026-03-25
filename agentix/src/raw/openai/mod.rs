@@ -9,10 +9,10 @@ use tracing::debug;
 use crate::config::AgentConfig;
 use crate::error::ApiError;
 use crate::msg::LlmEvent;
-use crate::provider::{Provider, PostConfig, post_streaming};
+use crate::provider::{Provider, PostConfig, post_streaming, post_json};
 use crate::request::{Message, Request, ToolCall, ToolChoice};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
 use request::Request as OaiRequest;
 use response::{StreamChunk, DeltaToolCall};
@@ -36,6 +36,19 @@ impl Provider for OpenAIProvider {
         stream_openai_compatible(
             &self.token, http, config, messages, tools,
             None, // no history transform
+        ).await
+    }
+
+    async fn complete(
+        &self,
+        http:     &reqwest::Client,
+        config:   &AgentConfig,
+        messages: &[Message],
+        tools:    &[ToolDefinition],
+    ) -> Result<CompleteResponse, ApiError> {
+        complete_openai_compatible(
+            &self.token, http, config, messages, tools,
+            None,
         ).await
     }
 }
@@ -155,4 +168,61 @@ fn finalize(bufs: &mut StreamBufs) -> Vec<ToolCall> {
     bufs.tool_call_bufs.drain(..).flatten().map(|p| ToolCall {
         id: p.id, name: p.name, arguments: p.arguments,
     }).collect()
+}
+
+// ── Non-streaming (complete) ──────────────────────────────────────────────────
+
+pub(crate) async fn complete_openai_compatible(
+    token:       &str,
+    http:        &reqwest::Client,
+    config:      &AgentConfig,
+    messages:    &[Message],
+    tools:       &[ToolDefinition],
+    prepare_history: Option<fn(Vec<Message>) -> Vec<Message>>,
+) -> Result<CompleteResponse, ApiError> {
+    let tool_choice = if tools.is_empty() { None } else { Some(ToolChoice::Auto) };
+    let history = match prepare_history {
+        Some(f) => f(messages.to_vec()),
+        None    => messages.to_vec(),
+    };
+    let req = OaiRequest::from(Request {
+        system_message:  config.system_prompt.clone(),
+        messages:        history,
+        model:           config.model.clone(),
+        tools:           if tools.is_empty() { None } else { Some(tools.to_vec()) },
+        tool_choice,
+        stream:          false,
+        temperature:     config.temperature,
+        max_tokens:      config.max_tokens,
+        response_format: None,
+        extra_body:      if config.extra_body.is_empty() { None } else { Some(config.extra_body.clone()) },
+    });
+    let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+
+    let body = post_json(http, &url, &req, token, &PostConfig {
+        use_query_key:  false,
+        auth_header:    None,
+        extra_headers:  &[],
+        max_retries:    config.max_retries,
+        retry_delay_ms: config.retry_delay_ms,
+    }).await?;
+
+    let raw: response::CompleteResponse = serde_json::from_str(&body)
+        .map_err(ApiError::Json)?;
+
+    let choice = raw.choices.into_iter().next();
+    let msg = choice.map(|c| c.message);
+
+    Ok(CompleteResponse {
+        content: msg.as_ref().and_then(|m| m.content.clone()),
+        reasoning: msg.as_ref().and_then(|m| m.reasoning_content.clone()),
+        tool_calls: msg.map(|m| {
+            m.tool_calls.unwrap_or_default().into_iter().map(|tc| ToolCall {
+                id: tc.id,
+                name: tc.function.name,
+                arguments: tc.function.arguments,
+            }).collect()
+        }).unwrap_or_default(),
+        usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+    })
 }

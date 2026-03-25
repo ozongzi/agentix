@@ -8,7 +8,8 @@ use crate::provider::Provider;
 use crate::request::Message;
 use crate::raw::shared::ToolDefinition;
 
-use crate::raw::openai::stream_openai_compatible;
+use crate::raw::openai::{stream_openai_compatible, complete_openai_compatible};
+use crate::types::CompleteResponse;
 
 /// Provider for the DeepSeek API.
 pub struct DeepSeekProvider { token: String }
@@ -27,6 +28,19 @@ impl Provider for DeepSeekProvider {
         tools:    &[ToolDefinition],
     ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
         stream_openai_compatible(
+            &self.token, http, config, messages, tools,
+            Some(prepare_history),
+        ).await
+    }
+
+    async fn complete(
+        &self,
+        http:     &reqwest::Client,
+        config:   &AgentConfig,
+        messages: &[Message],
+        tools:    &[ToolDefinition],
+    ) -> Result<CompleteResponse, ApiError> {
+        complete_openai_compatible(
             &self.token, http, config, messages, tools,
             Some(prepare_history),
         ).await

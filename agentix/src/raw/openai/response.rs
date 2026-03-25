@@ -47,6 +47,42 @@ pub struct Usage {
     pub total_tokens: u32,
 }
 
+// ── Non-streaming response ────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteResponse {
+    pub choices: Vec<CompleteChoice>,
+    #[serde(default)]
+    pub usage: Option<Usage>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteChoice {
+    pub message: CompleteMessage,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteMessage {
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    #[serde(default)]
+    pub tool_calls: Option<Vec<CompleteToolCall>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteToolCall {
+    pub id: String,
+    pub function: CompleteFunctionCall,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CompleteFunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
 impl From<Usage> for crate::types::UsageStats {
     fn from(u: Usage) -> Self {
         Self {
