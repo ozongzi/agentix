@@ -38,7 +38,7 @@
 //! # #[tool] impl agentix::Tool for Calc { async fn add(&self, a: f64, b: f64) -> f64 { a + b } }
 //! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! McpServer::new(ToolBundle::new().with(Calc))
-//!     .serve_http(([0, 0, 0, 0], 3001))
+//!     .serve_http(("0.0.0.0", 3001))
 //!     .await?;
 //! # Ok(()) }
 //! ```
