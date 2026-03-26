@@ -1,37 +1,6 @@
-use async_trait::async_trait;
-use futures::stream::BoxStream;
 use tracing::warn;
 
-use crate::config::AgentConfig;
 use crate::error::ApiError;
-use crate::msg::LlmEvent;
-use crate::request::Message;
-use crate::raw::shared::ToolDefinition;
-use crate::types::CompleteResponse;
-
-// ── Provider trait ─────────────────────────────────────────────────────────────
-
-/// Abstracts a single LLM provider.
-#[async_trait]
-pub trait Provider: Send + Sync {
-    async fn stream(
-        &self,
-        http:     &reqwest::Client,
-        config:   &AgentConfig,
-        messages: &[Message],
-        tools:    &[ToolDefinition],
-    ) -> Result<BoxStream<'static, LlmEvent>, ApiError>;
-
-    /// Non-streaming completion. Each provider implements this natively
-    /// (i.e. sends `stream: false` and parses the full JSON response).
-    async fn complete(
-        &self,
-        http:     &reqwest::Client,
-        config:   &AgentConfig,
-        messages: &[Message],
-        tools:    &[ToolDefinition],
-    ) -> Result<CompleteResponse, ApiError>;
-}
 
 // ── Shared HTTP POST helper ────────────────────────────────────────────────────
 
@@ -117,10 +86,3 @@ pub(crate) async fn post_json<T: serde::Serialize>(
     let resp = post_streaming(http, url, body, token, cfg).await?;
     resp.text().await.map_err(ApiError::Network)
 }
-
-// ── Concrete providers (re-exported from raw/) ────────────────────────────────
-
-pub use crate::raw::anthropic::AnthropicProvider;
-pub use crate::raw::deepseek::DeepSeekProvider;
-pub use crate::raw::openai::OpenAIProvider;
-pub use crate::raw::gemini::GeminiProvider;

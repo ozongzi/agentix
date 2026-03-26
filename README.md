@@ -1,6 +1,6 @@
 # agentix
 
-Stateless, multi-provider LLM client for Rust — streaming, non-streaming, tool calls, and MCP support.
+Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, and MCP support.
 
 DeepSeek · OpenAI · Anthropic · Gemini — one unified API.
 
@@ -19,18 +19,18 @@ agentix = "0.7"
 ## Quick Start
 
 ```rust
-use agentix::{LlmClient, LlmEvent, Message, UserContent};
+use agentix::{Request, Provider, LlmEvent};
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = LlmClient::deepseek(std::env::var("DEEPSEEK_API_KEY")?);
-    client.system_prompt("You are a helpful assistant.");
+    let http = reqwest::Client::new();
 
-    let messages = vec![
-        Message::User(vec![UserContent::Text("What is the capital of France?".into())]),
-    ];
-    let mut stream = client.stream(&messages, &[]).await?;
+    let mut stream = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY")?)
+        .system_prompt("You are a helpful assistant.")
+        .user("What is the capital of France?")
+        .stream(&http)
+        .await?;
 
     while let Some(event) = stream.next().await {
         match event {
@@ -51,40 +51,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Four built-in providers, all using the same API:
 
 ```rust
-use agentix::LlmClient;
+use agentix::{Request, Provider};
 
 // DeepSeek  (default model: deepseek-chat)
-let client = LlmClient::deepseek("sk-...");
+let req = Request::new(Provider::DeepSeek, "sk-...");
 
 // OpenAI  (default model: gpt-4o)
-let client = LlmClient::openai("sk-...");
+let req = Request::new(Provider::OpenAI, "sk-...");
 
-// Anthropic / Claude  (default model: claude-opus-4-5)
-let client = LlmClient::anthropic("sk-ant-...");
+// Anthropic / Claude  (default model: claude-sonnet-4-20250514)
+let req = Request::new(Provider::Anthropic, "sk-ant-...");
 
 // Gemini  (default model: gemini-2.0-flash)
-let client = LlmClient::gemini("AIza...");
+let req = Request::new(Provider::Gemini, "AIza...");
 
 // Any OpenAI-compatible endpoint (e.g. OpenRouter)
-let client = LlmClient::openai("sk-or-...");
-client.base_url("https://openrouter.ai/api/v1");
-client.model("openrouter/free");
-
-// From config strings (useful for dynamic provider selection)
-let client = LlmClient::from_parts("openai", "sk-...", "https://api.openai.com/v1", "gpt-4o");
+let req = Request::new(Provider::OpenAI, "sk-or-...")
+    .base_url("https://openrouter.ai/api/v1")
+    .model("openrouter/free");
 ```
 
 ---
 
-## LlmClient API
+## Request API
 
-[`LlmClient`] is stateless — the caller owns message history and tool dispatch.
-All clones share the same config and HTTP connection pool.
+`Request` is a self-contained value type — it carries provider, credentials, model,
+messages, tools, and tuning. Call `stream()` or `complete()` with a shared `reqwest::Client`.
 
 ### `stream()` — streaming completion
 
 ```rust
-let mut stream = client.stream(&messages, &tool_defs).await?;
+let http = reqwest::Client::new();
+let mut stream = Request::new(Provider::OpenAI, "sk-...")
+    .system_prompt("You are helpful.")
+    .user("Hello!")
+    .stream(&http)
+    .await?;
+
 while let Some(event) = stream.next().await {
     match event {
         LlmEvent::Token(t)         => print!("{t}"),
@@ -101,24 +104,30 @@ while let Some(event) = stream.next().await {
 ### `complete()` — non-streaming completion
 
 ```rust
-let resp = client.complete(&messages, &[]).await?;
+let resp = Request::new(Provider::OpenAI, "sk-...")
+    .user("What is 2+2?")
+    .complete(&http)
+    .await?;
 println!("{}", resp.content.unwrap_or_default());
 println!("reasoning: {:?}", resp.reasoning);
 println!("tool_calls: {:?}", resp.tool_calls);
 println!("usage: {:?}", resp.usage);
 ```
 
-### Configuration
+### Builder methods
 
 ```rust
-client.model("deepseek-reasoner");
-client.base_url("https://custom.api/v1");
-client.system_prompt("You are helpful.");
-client.max_tokens(4096);
-client.temperature(0.7);
-
-// Read current config
-let snap = client.snapshot();
+let req = Request::new(Provider::DeepSeek, "sk-...")
+    .model("deepseek-reasoner")
+    .base_url("https://custom.api/v1")
+    .system_prompt("You are helpful.")
+    .max_tokens(4096)
+    .temperature(0.7)
+    .retries(5, 2000)           // max retries, initial delay ms
+    .user("Hello!")             // convenience for adding a user message
+    .message(msg)               // add any Message variant
+    .messages(vec![...])        // set full history
+    .tools(tool_defs);          // set tool definitions
 ```
 
 ---
@@ -215,12 +224,18 @@ bundle.push(tool);
 ## Reliability
 
 - **Automatic retries** — exponential backoff for 429 / 5xx responses
-- **HTTP timeouts** — 10 s connect, 120 s response (overridable via `LlmClient::with_http`)
 - **Usage tracking** — per-request token accounting across all providers
 
 ---
 
 ## Changelog
+
+### 0.8.0
+
+- **Replaced `LlmClient` with `Request`** — self-contained value type with builder pattern
+- **Replaced `Provider` trait with `Provider` enum** — `DeepSeek`, `OpenAI`, `Anthropic`, `Gemini`
+- **Removed shared mutable state** — `Request` is `Clone`, `Send`, `Sync`; caller passes `&reqwest::Client`
+- **Removed `AgentConfig`** from public API — all config lives in `Request` fields
 
 ### 0.7.0
 

@@ -1,7 +1,6 @@
 pub mod request;
 pub mod response;
 
-use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
 use tracing::debug;
@@ -9,135 +8,101 @@ use tracing::debug;
 use crate::config::AgentConfig;
 use crate::error::ApiError;
 use crate::msg::LlmEvent;
-use crate::provider::{Provider, PostConfig, post_streaming, post_json};
-use crate::request::{Message, Request, ToolCall};
+use crate::provider::{PostConfig, post_streaming, post_json};
+use crate::request::{Message, ToolCall};
 use crate::raw::shared::ToolDefinition;
 use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
-use request::Request as AnthropicRequest;
 use response::{ContentBlockDelta, ContentBlockStart, ResponseBlock, StreamEvent};
 
-pub struct AnthropicProvider {
-    token: String,
-}
+pub(crate) async fn stream_anthropic(
+    token:    &str,
+    http:     &reqwest::Client,
+    config:   &AgentConfig,
+    messages: &[Message],
+    tools:    &[ToolDefinition],
+) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
+    let req = request::build_anthropic_request(config, messages, tools, true);
+    let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
 
-impl AnthropicProvider {
-    pub fn new(token: impl Into<String>) -> Self {
-        Self { token: token.into() }
-    }
-}
+    let resp = post_streaming(http, &url, &req, token, &PostConfig {
+        use_query_key:  false,
+        auth_header:    Some("x-api-key"),
+        extra_headers:  &[("anthropic-version", "2023-06-01")],
+        max_retries:    config.max_retries,
+        retry_delay_ms: config.retry_delay_ms,
+    }).await?;
 
-#[async_trait]
-impl Provider for AnthropicProvider {
-    async fn stream(
-        &self,
-        http:     &reqwest::Client,
-        config:   &AgentConfig,
-        messages: &[Message],
-        tools:    &[ToolDefinition],
-    ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
-        let req = build_request(config, messages, tools, true);
-        let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+    Ok(async_stream::stream! {
+        let mut bufs = StreamBufs::new();
+        let mut sse  = resp.bytes_stream().eventsource();
 
-        let resp = post_streaming(http, &url, &req, &self.token, &PostConfig {
-            use_query_key:  false,
-            auth_header:    Some("x-api-key"),
-            extra_headers:  &[("anthropic-version", "2023-06-01")],
-            max_retries:    config.max_retries,
-            retry_delay_ms: config.retry_delay_ms,
-        }).await?;
-
-        let token = self.token.clone();
-        let _ = token;
-
-        Ok(async_stream::stream! {
-            let mut bufs = StreamBufs::new();
-            let mut sse  = resp.bytes_stream().eventsource();
-
-            while let Some(ev_res) = sse.next().await {
-                match ev_res {
-                    Ok(ev) if ev.data == "[DONE]" => break,
-                    Ok(ev) => {
-                        match serde_json::from_str::<StreamEvent>(&ev.data) {
-                            Ok(chunk) => {
-                                for lev in parse_stream_event(chunk, &mut bufs) { yield lev; }
-                            }
-                            Err(e) => {
-                                debug!(data = %ev.data, error = %e, "anthropic chunk parse failed");
-                            }
+        while let Some(ev_res) = sse.next().await {
+            match ev_res {
+                Ok(ev) if ev.data == "[DONE]" => break,
+                Ok(ev) => {
+                    match serde_json::from_str::<StreamEvent>(&ev.data) {
+                        Ok(chunk) => {
+                            for lev in parse_stream_event(chunk, &mut bufs) { yield lev; }
+                        }
+                        Err(e) => {
+                            debug!(data = %ev.data, error = %e, "anthropic chunk parse failed");
                         }
                     }
-                    Err(e) => { yield LlmEvent::Error(e.to_string()); break; }
                 }
-            }
-
-            for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
-            yield LlmEvent::Done;
-        }.boxed())
-    }
-
-    async fn complete(
-        &self,
-        http:     &reqwest::Client,
-        config:   &AgentConfig,
-        messages: &[Message],
-        tools:    &[ToolDefinition],
-    ) -> Result<CompleteResponse, ApiError> {
-        let req = build_request(config, messages, tools, false);
-        let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
-
-        let body = post_json(http, &url, &req, &self.token, &PostConfig {
-            use_query_key:  false,
-            auth_header:    Some("x-api-key"),
-            extra_headers:  &[("anthropic-version", "2023-06-01")],
-            max_retries:    config.max_retries,
-            retry_delay_ms: config.retry_delay_ms,
-        }).await?;
-
-        let raw: response::Response = serde_json::from_str(&body)
-            .map_err(ApiError::Json)?;
-
-        let mut content_buf = String::new();
-        let mut reasoning_buf = String::new();
-        let mut tool_calls = Vec::new();
-
-        for block in raw.content {
-            match block {
-                ResponseBlock::Text { text } => content_buf.push_str(&text),
-                ResponseBlock::Thinking { thinking } => reasoning_buf.push_str(&thinking),
-                ResponseBlock::ToolUse { id, name, input } => {
-                    tool_calls.push(ToolCall {
-                        id,
-                        name,
-                        arguments: serde_json::to_string(&input).unwrap_or_default(),
-                    });
-                }
+                Err(e) => { yield LlmEvent::Error(e.to_string()); break; }
             }
         }
 
-        Ok(CompleteResponse {
-            content: if content_buf.is_empty() { None } else { Some(content_buf) },
-            reasoning: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf) },
-            tool_calls,
-            usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
-        })
-    }
+        for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
+        yield LlmEvent::Done;
+    }.boxed())
 }
 
-fn build_request(config: &AgentConfig, messages: &[Message], tools: &[ToolDefinition], stream: bool) -> AnthropicRequest {
-    use crate::request::ToolChoice;
-    let tool_choice = if tools.is_empty() { None } else { Some(ToolChoice::Auto) };
-    AnthropicRequest::from(Request {
-        system_message:  config.system_prompt.clone(),
-        messages:        messages.to_vec(),
-        model:           config.model.clone(),
-        tools:           if tools.is_empty() { None } else { Some(tools.to_vec()) },
-        tool_choice,
-        stream,
-        temperature:     config.temperature,
-        max_tokens:      config.max_tokens,
-        response_format: None,
-        extra_body:      if config.extra_body.is_empty() { None } else { Some(config.extra_body.clone()) },
+pub(crate) async fn complete_anthropic(
+    token:    &str,
+    http:     &reqwest::Client,
+    config:   &AgentConfig,
+    messages: &[Message],
+    tools:    &[ToolDefinition],
+) -> Result<CompleteResponse, ApiError> {
+    let req = request::build_anthropic_request(config, messages, tools, false);
+    let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+
+    let body = post_json(http, &url, &req, token, &PostConfig {
+        use_query_key:  false,
+        auth_header:    Some("x-api-key"),
+        extra_headers:  &[("anthropic-version", "2023-06-01")],
+        max_retries:    config.max_retries,
+        retry_delay_ms: config.retry_delay_ms,
+    }).await?;
+
+    let raw: response::Response = serde_json::from_str(&body)
+        .map_err(ApiError::Json)?;
+
+    let mut content_buf = String::new();
+    let mut reasoning_buf = String::new();
+    let mut tool_calls = Vec::new();
+
+    for block in raw.content {
+        match block {
+            ResponseBlock::Text { text } => content_buf.push_str(&text),
+            ResponseBlock::Thinking { thinking } => reasoning_buf.push_str(&thinking),
+            ResponseBlock::ToolUse { id, name, input } => {
+                tool_calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments: serde_json::to_string(&input).unwrap_or_default(),
+                });
+            }
+        }
+    }
+
+    Ok(CompleteResponse {
+        content: if content_buf.is_empty() { None } else { Some(content_buf) },
+        reasoning: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf) },
+        tool_calls,
+        usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
     })
 }
 

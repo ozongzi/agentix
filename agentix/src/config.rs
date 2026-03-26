@@ -1,17 +1,20 @@
 use serde_json::{Map, Value};
 
-/// Runtime-mutable configuration for an agent turn.
-///
-/// Stored inside [`LlmClient`][crate::LlmClient] behind an `RwLock`.
-/// Every field takes effect on the **next** API request — changes made while
-/// a generation is in-flight apply from the following turn onwards.
+/// Internal configuration struct bridging [`Request`](crate::Request) to raw
+/// provider functions.  Not part of the public API.
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
+    /// Provider API base URL (e.g. `"https://api.deepseek.com"`).
     pub base_url:      String,
+    /// Model identifier (e.g. `"deepseek-chat"`, `"gpt-4o"`).
     pub model:         String,
+    /// Optional system prompt prepended to every request.
     pub system_prompt: Option<String>,
+    /// Maximum tokens to generate. `None` = provider default.
     pub max_tokens:    Option<u32>,
+    /// Sampling temperature. `None` = provider default.
     pub temperature:   Option<f32>,
+    /// Extra JSON fields merged into the request body (provider-specific).
     pub extra_body:    Map<String, Value>,
 
     /// Maximum number of retries for transient errors. Default: 3.

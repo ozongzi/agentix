@@ -1,0 +1,8 @@
+data: {"candidates":[{"content":{"parts":[{"text":"The capital"}],"role":"model"},"finishReason":null}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":" of France"}],"role":"model"},"finishReason":null}]}
+
+data: {"candidates":[{"content":{"parts":[{"text":" is Paris."}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":7,"totalTokenCount":17}}
+
+data: [DONE]
+

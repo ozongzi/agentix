@@ -1,6 +1,8 @@
 use serde::Serialize;
 
-use crate::request::{ImageData, Message, UserContent};
+use crate::config::AgentConfig;
+use crate::request::{ImageData, Message, ToolChoice, UserContent};
+use crate::raw::shared::ToolDefinition;
 
 #[derive(Debug, Serialize)]
 pub struct Request {
@@ -74,45 +76,52 @@ pub struct ResponseFunctionCall {
     pub arguments: String,
 }
 
-impl From<crate::request::Request> for Request {
-    fn from(req: crate::request::Request) -> Self {
-        let mut messages = Vec::new();
-        if let Some(s) = req.system_message {
-            messages.push(OaiMessage::System { content: s });
+pub(crate) fn build_oai_request(
+    config: &AgentConfig,
+    history: Vec<Message>,
+    tools: &[ToolDefinition],
+    tool_choice: Option<ToolChoice>,
+    stream: bool,
+) -> Request {
+    let mut messages = Vec::new();
+    if let Some(s) = &config.system_prompt
+        && !s.is_empty() {
+            messages.push(OaiMessage::System { content: s.clone() });
         }
-        for m in req.messages {
-            match m {
-                Message::User(parts) => messages.push(OaiMessage::User {
-                    content: user_content_from_parts(parts),
-                }),
-                Message::Assistant { content, reasoning, tool_calls } => {
-                    messages.push(OaiMessage::Assistant {
-                        content,
-                        reasoning_content: reasoning,
-                        tool_calls: tool_calls.into_iter().map(|tc| ResponseToolCall {
-                            id: tc.id,
-                            r#type: "function".to_string(),
-                            function: ResponseFunctionCall { name: tc.name, arguments: tc.arguments },
-                        }).collect(),
-                    });
-                }
-                Message::ToolResult { call_id, content } => messages.push(OaiMessage::Tool {
-                    tool_call_id: call_id,
+    for m in history {
+        match m {
+            Message::User(parts) => messages.push(OaiMessage::User {
+                content: user_content_from_parts(parts),
+            }),
+            Message::Assistant { content, reasoning, tool_calls } => {
+                messages.push(OaiMessage::Assistant {
                     content,
-                }),
+                    reasoning_content: reasoning,
+                    tool_calls: tool_calls.into_iter().map(|tc| ResponseToolCall {
+                        id: tc.id,
+                        r#type: "function".to_string(),
+                        function: ResponseFunctionCall { name: tc.name, arguments: tc.arguments },
+                    }).collect(),
+                });
             }
+            Message::ToolResult { call_id, content } => messages.push(OaiMessage::Tool {
+                tool_call_id: call_id,
+                content,
+            }),
         }
-        Request {
-            model: req.model,
-            messages,
-            tools: req.tools,
-            tool_choice: req.tool_choice,
-            stream: Some(req.stream),
-            temperature: req.temperature,
-            max_tokens: req.max_tokens,
-            response_format: req.response_format,
-            extra_body: req.extra_body,
-        }
+    }
+    let tools_opt = if tools.is_empty() { None } else { Some(tools.to_vec()) };
+    let extra = if config.extra_body.is_empty() { None } else { Some(config.extra_body.clone()) };
+    Request {
+        model: config.model.clone(),
+        messages,
+        tools: tools_opt,
+        tool_choice,
+        stream: Some(stream),
+        temperature: config.temperature,
+        max_tokens: config.max_tokens,
+        response_format: None,
+        extra_body: extra,
     }
 }
 

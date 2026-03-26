@@ -4,7 +4,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! agentix = { version = "0.4", features = ["mcp-server"] }
+//! agentix = { version = "0.7", features = ["mcp-server"] }
 //! ```
 //!
 //! # Usage
@@ -24,6 +24,21 @@
 //! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! McpServer::new(ToolBundle::new().with(Calc))
 //!     .serve_stdio()
+//!     .await?;
+//! # Ok(()) }
+//! ```
+//!
+//! ## HTTP server
+//!
+//! Expose tools over HTTP (Streamable HTTP transport):
+//!
+//! ```no_run
+//! # use agentix::{McpServer, ToolBundle, tool};
+//! # struct Calc;
+//! # #[tool] impl agentix::Tool for Calc { async fn add(&self, a: f64, b: f64) -> f64 { a + b } }
+//! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! McpServer::new(ToolBundle::new().with(Calc))
+//!     .serve_http(([0, 0, 0, 0], 3001))
 //!     .await?;
 //! # Ok(()) }
 //! ```
@@ -135,6 +150,24 @@ impl McpServer {
         );
 
         axum::Router::new().fallback_service(service)
+    }
+
+    /// Bind a TCP listener and serve the tools over HTTP using the MCP
+    /// streamable-HTTP transport (POST + SSE).
+    ///
+    /// `addr` accepts anything that [`tokio::net::TcpListener::bind`] accepts
+    /// (e.g. `([0, 0, 0, 0], 3001)` or `"127.0.0.1:3001"`).
+    ///
+    /// This method blocks until the server is shut down.
+    #[cfg(feature = "mcp-server")]
+    pub async fn serve_http(self, addr: impl tokio::net::ToSocketAddrs) -> Result<(), McpServerError> {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let local_addr = listener.local_addr()?;
+        info!(name = %self.name, version = %self.version, %local_addr, "starting MCP HTTP server");
+        let router = self.into_axum_router();
+        axum::serve(listener, router)
+            .await
+            .map_err(McpServerError::Bind)
     }
 }
 

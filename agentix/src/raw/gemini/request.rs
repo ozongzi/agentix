@@ -1,8 +1,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ToolChoice, UserContent};
+use crate::request::{ImageData, Message, UserContent};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,97 +108,99 @@ pub struct GenerationConfig {
     pub response_mime_type: Option<&'static str>,
 }
 
-impl From<crate::request::Request> for Request {
-    fn from(req: crate::request::Request) -> Self {
-        let system_instruction = req.system_message
-            .filter(|s| !s.is_empty())
-            .map(|s| SystemInstruction { parts: vec![Part::Text(s)] });
+pub(crate) fn build_gemini_request(
+    config: &AgentConfig,
+    messages: &[Message],
+    tools: &[ToolDefinition],
+) -> Request {
+    let system_instruction = config.system_prompt.as_ref()
+        .filter(|s| !s.is_empty())
+        .map(|s| SystemInstruction { parts: vec![Part::Text(s.clone())] });
 
-        let mut contents: Vec<Content> = Vec::new();
-        let mut pending_fn_responses: Vec<Part> = Vec::new();
+    let mut contents: Vec<Content> = Vec::new();
+    let mut pending_fn_responses: Vec<Part> = Vec::new();
 
-        for msg in req.messages {
-            match msg {
-                Message::User(parts) => {
-                    if !pending_fn_responses.is_empty() {
-                        contents.push(Content {
-                            role: "user",
-                            parts: std::mem::take(&mut pending_fn_responses),
-                        });
-                    }
+    for msg in messages {
+        match msg {
+            Message::User(parts) => {
+                if !pending_fn_responses.is_empty() {
                     contents.push(Content {
                         role: "user",
-                        parts: parts.into_iter().map(|p| match p {
-                            UserContent::Text(t) => Part::Text(t),
-                            UserContent::Image(img) => Part::InlineData(Blob {
-                                mime_type: img.mime_type,
-                                data: match img.data {
-                                    ImageData::Base64(b) => b,
-                                    ImageData::Url(u)    => u,
-                                },
-                            }),
-                        }).collect(),
+                        parts: std::mem::take(&mut pending_fn_responses),
                     });
                 }
-                Message::Assistant { content, tool_calls, .. } => {
-                    let mut parts: Vec<Part> = Vec::new();
-                    if let Some(t) = content && !t.is_empty() {
-                        parts.push(Part::Text(t));
-                    }
-                    for tc in tool_calls {
-                        let args = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                        parts.push(Part::FunctionCall(FunctionCall { name: tc.name, args }));
-                    }
-                    if !parts.is_empty() {
-                        contents.push(Content { role: "model", parts });
-                    }
+                contents.push(Content {
+                    role: "user",
+                    parts: parts.iter().map(|p| match p {
+                        UserContent::Text(t) => Part::Text(t.clone()),
+                        UserContent::Image(img) => Part::InlineData(Blob {
+                            mime_type: img.mime_type.clone(),
+                            data: match &img.data {
+                                ImageData::Base64(b) => b.clone(),
+                                ImageData::Url(u)    => u.clone(),
+                            },
+                        }),
+                    }).collect(),
+                });
+            }
+            Message::Assistant { content, tool_calls, .. } => {
+                let mut parts: Vec<Part> = Vec::new();
+                if let Some(t) = content && !t.is_empty() {
+                    parts.push(Part::Text(t.clone()));
                 }
-                Message::ToolResult { call_id, content } => {
-                    pending_fn_responses.push(Part::FunctionResponse(FunctionResponse {
-                        name: call_id,
-                        response: Value::String(content),
-                    }));
+                for tc in tool_calls {
+                    let args = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                    parts.push(Part::FunctionCall(FunctionCall { name: tc.name.clone(), args }));
+                }
+                if !parts.is_empty() {
+                    contents.push(Content { role: "model", parts });
                 }
             }
+            Message::ToolResult { call_id, content } => {
+                pending_fn_responses.push(Part::FunctionResponse(FunctionResponse {
+                    name: call_id.clone(),
+                    response: Value::String(content.clone()),
+                }));
+            }
         }
-        if !pending_fn_responses.is_empty() {
-            contents.push(Content { role: "user", parts: pending_fn_responses });
-        }
-
-        let tools = req.tools.map(|ts| vec![GeminiTools {
-            function_declarations: ts.into_iter().map(|t: ToolDefinition| FunctionDeclaration {
-                name: t.function.name,
-                description: t.function.description,
-                parameters: t.function.parameters,
-            }).collect(),
-        }]);
-
-        let tool_config = req.tool_choice.map(|tc| ToolConfig {
-            function_calling_config: FunctionCallingConfig {
-                mode: match tc {
-                    ToolChoice::None     => "NONE",
-                    ToolChoice::Auto     => "AUTO",
-                    ToolChoice::Required => "ANY",
-                    ToolChoice::Tool(_)  => "ANY",
-                },
-                allowed_function_names: match tc {
-                    ToolChoice::Tool(name) => Some(vec![name]),
-                    _                      => None,
-                },
-            },
-        });
-
-        let gc = GenerationConfig {
-            temperature:        req.temperature,
-            max_output_tokens:  req.max_tokens,
-            response_mime_type: req.response_format.map(|_| "application/json"),
-        };
-        let generation_config = if gc.temperature.is_none() && gc.max_output_tokens.is_none() && gc.response_mime_type.is_none() {
-            None
-        } else {
-            Some(gc)
-        };
-
-        Request { contents, system_instruction, tools, tool_config, generation_config }
     }
+    if !pending_fn_responses.is_empty() {
+        contents.push(Content { role: "user", parts: pending_fn_responses });
+    }
+
+    let gemini_tools = if tools.is_empty() {
+        None
+    } else {
+        Some(vec![GeminiTools {
+            function_declarations: tools.iter().map(|t| FunctionDeclaration {
+                name: t.function.name.clone(),
+                description: t.function.description.clone(),
+                parameters: t.function.parameters.clone(),
+            }).collect(),
+        }])
+    };
+
+    let tool_config = if tools.is_empty() {
+        None
+    } else {
+        Some(ToolConfig {
+            function_calling_config: FunctionCallingConfig {
+                mode: "AUTO",
+                allowed_function_names: None,
+            },
+        })
+    };
+
+    let gc = GenerationConfig {
+        temperature:        config.temperature,
+        max_output_tokens:  config.max_tokens,
+        response_mime_type: None,
+    };
+    let generation_config = if gc.temperature.is_none() && gc.max_output_tokens.is_none() && gc.response_mime_type.is_none() {
+        None
+    } else {
+        Some(gc)
+    };
+
+    Request { contents, system_instruction, tools: gemini_tools, tool_config, generation_config }
 }

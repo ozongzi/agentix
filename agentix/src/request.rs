@@ -1,27 +1,55 @@
 //! Unified request layer.
 //!
-//! `AgentRequest` is the provider-agnostic representation of a chat completion
-//! request. Each provider implements `From<AgentRequest>` (or
-//! `Into<ProviderRequest>`) in its own module so that the agent core never
-//! needs to know about provider-specific field names or structural quirks.
+//! [`Request`] is the self-contained, provider-agnostic chat-completion request.
+//! It carries *everything* needed to hit an LLM API — provider, credentials,
+//! model, messages, tools, and tuning knobs.
+//!
+//! ```no_run
+//! use agentix::{Request, Provider, Message, UserContent, LlmEvent};
+//! use futures::StreamExt;
+//!
+//! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let http = reqwest::Client::new();
+//!
+//! let mut stream = Request::new(Provider::DeepSeek, "sk-...")
+//!     .model("deepseek-chat")
+//!     .system_prompt("You are helpful.")
+//!     .user("Hello!")
+//!     .stream(&http)
+//!     .await?;
+//!
+//! while let Some(event) = stream.next().await {
+//!     if let LlmEvent::Token(t) = event { print!("{t}"); }
+//! }
+//! # Ok(()) }
+//! ```
 
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
+
+use crate::error::ApiError;
+use crate::msg::LlmEvent;
 use crate::raw::shared::ToolDefinition;
+use crate::types::CompleteResponse;
 
 // ─── Message ────────────────────────────────────────────────────────────────
 
 /// Image content that can be embedded in a user message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageContent {
+    /// The image payload.
     pub data: ImageData,
     /// MIME type, e.g. `"image/jpeg"`, `"image/png"`.
     pub mime_type: String,
 }
 
+/// How the image data is provided.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageData {
+    /// Base64-encoded image bytes.
     Base64(String),
+    /// Publicly accessible URL.
     Url(String),
 }
 
@@ -106,10 +134,49 @@ impl Message {
 /// A single tool invocation requested by the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
+    /// Provider-assigned call ID (used to match results back).
     pub id: String,
+    /// Name of the tool the model wants to invoke.
     pub name: String,
     /// Raw JSON string produced by the model.
     pub arguments: String,
+}
+
+// ─── Provider ──────────────────────────────────────────────────────────────
+
+/// Which LLM provider to use.
+///
+/// Each variant determines the request/response format, auth method, and
+/// default base URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Provider {
+    DeepSeek,
+    OpenAI,
+    Anthropic,
+    Gemini,
+}
+
+impl Provider {
+    /// Default base URL for this provider.
+    pub fn default_base_url(&self) -> &'static str {
+        match self {
+            Provider::DeepSeek  => "https://api.deepseek.com",
+            Provider::OpenAI    => "https://api.openai.com/v1",
+            Provider::Anthropic => "https://api.anthropic.com",
+            Provider::Gemini    => "https://generativelanguage.googleapis.com/v1beta",
+        }
+    }
+
+    /// Default model for this provider.
+    pub fn default_model(&self) -> &'static str {
+        match self {
+            Provider::DeepSeek  => "deepseek-chat",
+            Provider::OpenAI    => "gpt-4o",
+            Provider::Anthropic => "claude-sonnet-4-20250514",
+            Provider::Gemini    => "gemini-2.0-flash",
+        }
+    }
 }
 
 // ─── ToolChoice ─────────────────────────────────────────────────────────────
@@ -129,46 +196,255 @@ pub enum ToolChoice {
     Tool(String),
 }
 
-// ─── AgentRequest ───────────────────────────────────────────────────────────
+// ─── Request ────────────────────────────────────────────────────────────────
 
-/// The canonical, provider-neutral chat-completion request.
+/// A self-contained, provider-agnostic chat-completion request.
 ///
-/// Fields deliberately omitted (e.g. `top_p`, `logprobs`, `prefix`) are either
-/// provider-specific or rarely needed. Pass them through the `extra_body`
-/// mechanism on the provider's raw request if you need them.
-#[derive(Debug, Clone, Default)]
+/// Carries everything needed to hit an LLM API: provider, credentials, model,
+/// messages, tools, and tuning parameters.
+///
+/// Call [`stream()`][Request::stream] or [`complete()`][Request::complete] with
+/// a shared `reqwest::Client` to send the request.
+#[derive(Debug, Clone)]
 pub struct Request {
-    /// Optional system prompt. `None` means no system message is sent.
-    pub system_message: Option<String>,
+    // ── Identity ──────────────────────────────────────────────────────────
 
-    /// Conversation history. Must not contain `System` messages — use
-    /// `system_message` instead.
+    /// Which provider to use.
+    pub provider: Provider,
+    /// API key / token.
+    pub api_key: String,
+    /// Base URL override. If empty, uses [`Provider::default_base_url`].
+    pub base_url: String,
+
+    // ── Model & messages ─────────────────────────────────────────────────
+
+    /// Model identifier (e.g. `"deepseek-chat"`, `"gpt-4o"`).
+    pub model: String,
+    /// Optional system prompt.
+    pub system_message: Option<String>,
+    /// Conversation history.
     pub messages: Vec<Message>,
 
-    /// Model identifier string (e.g. `"deepseek-chat"`, `"gpt-4o"`).
-    pub model: String,
+    // ── Tools ────────────────────────────────────────────────────────────
 
     /// Tools the model may call.
-    pub tools: Option<Vec<ToolDefinition>>,
-
+    pub tools: Vec<ToolDefinition>,
     /// How the model should select tools.
     pub tool_choice: Option<ToolChoice>,
 
-    /// Whether to stream the response. Defaults to `false`.
-    pub stream: bool,
+    // ── Tuning ───────────────────────────────────────────────────────────
 
     /// Sampling temperature.
     pub temperature: Option<f32>,
-
     /// Maximum tokens to generate.
     pub max_tokens: Option<u32>,
-
     /// Constrain the output format.
     pub response_format: Option<ResponseFormat>,
+    /// Arbitrary extra top-level JSON fields merged into the provider's
+    /// raw request body (e.g. `prefix`, `thinking`).
+    pub extra_body: serde_json::Map<String, serde_json::Value>,
 
-    /// Arbitrary extra top-level fields merged into the provider's raw request body.
-    /// Use for provider-specific options not modelled here (e.g. `prefix`, `thinking`).
-    pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+    // ── Retry ────────────────────────────────────────────────────────────
+
+    /// Maximum retries for transient errors. Default: 3.
+    pub max_retries: u32,
+    /// Initial retry delay in milliseconds. Default: 1000.
+    pub retry_delay_ms: u64,
+}
+
+impl Request {
+    /// Create a new request for the given provider and API key.
+    ///
+    /// Sets sensible defaults: provider's default base URL and model,
+    /// 3 retries with 1 s initial delay, no system prompt.
+    pub fn new(provider: Provider, api_key: impl Into<String>) -> Self {
+        Self {
+            base_url: provider.default_base_url().to_string(),
+            model: provider.default_model().to_string(),
+            api_key: api_key.into(),
+            provider,
+            system_message: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            tool_choice: None,
+            temperature: None,
+            max_tokens: None,
+            response_format: None,
+            extra_body: serde_json::Map::new(),
+            max_retries: 3,
+            retry_delay_ms: 1000,
+        }
+    }
+
+    // ── Builder setters (all consume & return Self) ──────────────────────
+
+    /// Override the base URL.
+    pub fn base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into();
+        self
+    }
+
+    /// Set the model.
+    pub fn model(mut self, m: impl Into<String>) -> Self {
+        self.model = m.into();
+        self
+    }
+
+    /// Set the system prompt.
+    pub fn system_prompt(mut self, p: impl Into<String>) -> Self {
+        self.system_message = Some(p.into());
+        self
+    }
+
+    /// Append a message to the conversation.
+    pub fn message(mut self, m: Message) -> Self {
+        self.messages.push(m);
+        self
+    }
+
+    /// Append a user text message (convenience).
+    pub fn user(self, text: impl Into<String>) -> Self {
+        self.message(Message::User(vec![UserContent::Text(text.into())]))
+    }
+
+    /// Set the full message history.
+    pub fn messages(mut self, msgs: Vec<Message>) -> Self {
+        self.messages = msgs;
+        self
+    }
+
+    /// Set the tool definitions.
+    pub fn tools(mut self, tools: Vec<ToolDefinition>) -> Self {
+        self.tools = tools;
+        self
+    }
+
+    /// Set the temperature.
+    pub fn temperature(mut self, t: f32) -> Self {
+        self.temperature = Some(t);
+        self
+    }
+
+    /// Set the max tokens.
+    pub fn max_tokens(mut self, n: u32) -> Self {
+        self.max_tokens = Some(n);
+        self
+    }
+
+    /// Set retry parameters.
+    pub fn retries(mut self, max: u32, initial_delay_ms: u64) -> Self {
+        self.max_retries = max;
+        self.retry_delay_ms = initial_delay_ms;
+        self
+    }
+
+    /// Merge extra JSON fields into the request body.
+    pub fn extra_body(mut self, extra: serde_json::Map<String, serde_json::Value>) -> Self {
+        self.extra_body = extra;
+        self
+    }
+
+    // ── Effective base URL ───────────────────────────────────────────────
+
+    /// Resolve the effective base URL (custom or provider default).
+    pub fn effective_base_url(&self) -> &str {
+        if self.base_url.is_empty() {
+            self.provider.default_base_url()
+        } else {
+            &self.base_url
+        }
+    }
+
+    // ── Send ─────────────────────────────────────────────────────────────
+
+    /// Send a streaming request and return a stream of [`LlmEvent`]s.
+    pub async fn stream(
+        &self,
+        http: &reqwest::Client,
+    ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
+        let config = self.to_agent_config();
+        let messages = &self.messages;
+        let tools = &self.tools;
+
+        match self.provider {
+            Provider::DeepSeek => {
+                use crate::raw::openai::stream_openai_compatible;
+                use crate::raw::deepseek::prepare_history;
+                stream_openai_compatible(
+                    &self.api_key, http, &config, messages, tools,
+                    Some(prepare_history),
+                ).await
+            }
+            Provider::OpenAI => {
+                use crate::raw::openai::stream_openai_compatible;
+                stream_openai_compatible(
+                    &self.api_key, http, &config, messages, tools, None,
+                ).await
+            }
+            Provider::Anthropic => {
+                crate::raw::anthropic::stream_anthropic(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+            Provider::Gemini => {
+                crate::raw::gemini::stream_gemini(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+        }
+    }
+
+    /// Send a non-streaming request and return the complete response.
+    pub async fn complete(
+        &self,
+        http: &reqwest::Client,
+    ) -> Result<CompleteResponse, ApiError> {
+        let config = self.to_agent_config();
+        let messages = &self.messages;
+        let tools = &self.tools;
+
+        match self.provider {
+            Provider::DeepSeek => {
+                use crate::raw::openai::complete_openai_compatible;
+                use crate::raw::deepseek::prepare_history;
+                complete_openai_compatible(
+                    &self.api_key, http, &config, messages, tools,
+                    Some(prepare_history),
+                ).await
+            }
+            Provider::OpenAI => {
+                use crate::raw::openai::complete_openai_compatible;
+                complete_openai_compatible(
+                    &self.api_key, http, &config, messages, tools, None,
+                ).await
+            }
+            Provider::Anthropic => {
+                crate::raw::anthropic::complete_anthropic(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+            Provider::Gemini => {
+                crate::raw::gemini::complete_gemini(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+        }
+    }
+
+    /// Convert to the legacy `AgentConfig` for internal provider use.
+    /// This is a temporary bridge until providers are fully migrated.
+    fn to_agent_config(&self) -> crate::config::AgentConfig {
+        crate::config::AgentConfig {
+            base_url: self.effective_base_url().to_string(),
+            model: self.model.clone(),
+            system_prompt: self.system_message.clone(),
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+            extra_body: self.extra_body.clone(),
+            max_retries: self.max_retries,
+            retry_delay_ms: self.retry_delay_ms,
+        }
+    }
 }
 
 /// Provider-agnostic output-format hint.

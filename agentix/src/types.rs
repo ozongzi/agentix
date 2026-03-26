@@ -1,7 +1,7 @@
-//! Shared types used across the agent, raw provider, and request layers.
+//! Shared types used across the raw provider and request layers.
 //!
 //! These types are kept separate to avoid circular dependencies between
-//! `raw/` (provider wire formats) and `agent/` (agent logic).
+//! `raw/` (provider wire formats) and `request` (public API).
 
 // ── Usage & Accounting ────────────────────────────────────────────────────────
 
@@ -44,9 +44,13 @@ pub struct CompleteResponse {
 /// A tool call fragment emitted during a streaming turn.
 #[derive(Debug, Clone)]
 pub struct ToolCallChunk {
+    /// Unique call ID assigned by the provider.
     pub id: String,
+    /// Tool name being invoked.
     pub name: String,
+    /// Incremental JSON argument fragment.
     pub delta: String,
+    /// Zero-based index when multiple tool calls happen in one turn.
     pub index: u32,
 }
 
@@ -55,14 +59,20 @@ pub struct ToolCallChunk {
 /// Accumulates a single tool-call's incremental SSE deltas until the stream ends.
 #[derive(Debug)]
 pub struct PartialToolCall {
+    /// Unique call ID assigned by the provider.
     pub id: String,
+    /// Tool name being invoked.
     pub name: String,
+    /// JSON arguments accumulated so far.
     pub arguments: String,
 }
 
-/// Provider-agnostic streaming state, held inside `StreamingData<P>`.
+/// Provider-agnostic streaming state — accumulates text, reasoning, and
+/// tool-call fragments across SSE chunks.
 pub struct StreamBufs {
+    /// Accumulated text content.
     pub content_buf: String,
+    /// Accumulated reasoning / chain-of-thought.
     pub reasoning_buf: String,
     /// Sparse per-index partial tool-call buffers.
     pub tool_call_bufs: Vec<Option<PartialToolCall>>,

@@ -74,6 +74,7 @@ impl ApiError {
         }
     }
 
+    /// Construct an [`ApiError::Http`] from a status code and body text.
     pub fn http(status: StatusCode, text: impl Into<String>) -> Self {
         Self::Http {
             status,

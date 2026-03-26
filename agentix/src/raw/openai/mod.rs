@@ -1,7 +1,6 @@
 pub mod request;
 pub mod response;
 
-use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
 use tracing::debug;
@@ -9,49 +8,12 @@ use tracing::debug;
 use crate::config::AgentConfig;
 use crate::error::ApiError;
 use crate::msg::LlmEvent;
-use crate::provider::{Provider, PostConfig, post_streaming, post_json};
-use crate::request::{Message, Request, ToolCall, ToolChoice};
+use crate::provider::{PostConfig, post_streaming, post_json};
+use crate::request::{Message, ToolCall, ToolChoice};
 use crate::raw::shared::ToolDefinition;
 use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
-use request::Request as OaiRequest;
 use response::{StreamChunk, DeltaToolCall};
-
-/// Provider for the OpenAI API.
-pub struct OpenAIProvider { token: String }
-
-impl OpenAIProvider {
-    pub fn new(token: impl Into<String>) -> Self { Self { token: token.into() } }
-}
-
-#[async_trait]
-impl Provider for OpenAIProvider {
-    async fn stream(
-        &self,
-        http:     &reqwest::Client,
-        config:   &AgentConfig,
-        messages: &[Message],
-        tools:    &[ToolDefinition],
-    ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
-        stream_openai_compatible(
-            &self.token, http, config, messages, tools,
-            None, // no history transform
-        ).await
-    }
-
-    async fn complete(
-        &self,
-        http:     &reqwest::Client,
-        config:   &AgentConfig,
-        messages: &[Message],
-        tools:    &[ToolDefinition],
-    ) -> Result<CompleteResponse, ApiError> {
-        complete_openai_compatible(
-            &self.token, http, config, messages, tools,
-            None,
-        ).await
-    }
-}
 
 pub(crate) async fn stream_openai_compatible(
     token:       &str,
@@ -66,18 +28,9 @@ pub(crate) async fn stream_openai_compatible(
         Some(f) => f(messages.to_vec()),
         None    => messages.to_vec(),
     };
-    let req = OaiRequest::from(Request {
-        system_message:  config.system_prompt.clone(),
-        messages:        history,
-        model:           config.model.clone(),
-        tools:           if tools.is_empty() { None } else { Some(tools.to_vec()) },
-        tool_choice,
-        stream:          true,
-        temperature:     config.temperature,
-        max_tokens:      config.max_tokens,
-        response_format: None,
-        extra_body:      if config.extra_body.is_empty() { None } else { Some(config.extra_body.clone()) },
-    });
+    let req = request::build_oai_request(
+        config, history, tools, tool_choice, true,
+    );
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
     let token = token.to_string();
 
@@ -185,18 +138,9 @@ pub(crate) async fn complete_openai_compatible(
         Some(f) => f(messages.to_vec()),
         None    => messages.to_vec(),
     };
-    let req = OaiRequest::from(Request {
-        system_message:  config.system_prompt.clone(),
-        messages:        history,
-        model:           config.model.clone(),
-        tools:           if tools.is_empty() { None } else { Some(tools.to_vec()) },
-        tool_choice,
-        stream:          false,
-        temperature:     config.temperature,
-        max_tokens:      config.max_tokens,
-        response_format: None,
-        extra_body:      if config.extra_body.is_empty() { None } else { Some(config.extra_body.clone()) },
-    });
+    let req = request::build_oai_request(
+        config, history, tools, tool_choice, false,
+    );
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
 
     let body = post_json(http, &url, &req, token, &PostConfig {

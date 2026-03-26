@@ -2,24 +2,25 @@
 agentix — Multi-provider LLM client for Rust.
 
 Supports DeepSeek, OpenAI, Anthropic, and Gemini out of the box.
-The core API is a stateless [`LlmClient`] that turns `(messages, tools) → Stream<LlmEvent>`.
-The caller owns the message history, tool dispatch, and control flow.
+The core API is a value-type [`Request`] that carries everything needed to
+hit an LLM API — provider, credentials, model, messages, tools, and tuning.
+Call [`Request::stream`] or [`Request::complete`] with a shared `reqwest::Client`.
 
 # Quickstart
 
 ```no_run
-use agentix::{LlmClient, LlmEvent, Message, UserContent};
+use agentix::{Request, Provider, Message, UserContent, LlmEvent};
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = LlmClient::deepseek(std::env::var("DEEPSEEK_API_KEY")?);
-    client.system_prompt("You are helpful.");
+    let http = reqwest::Client::new();
 
-    let messages = vec![
-        Message::User(vec![UserContent::Text("Hello!".into())]),
-    ];
-    let mut stream = client.stream(&messages, &[]).await?;
+    let mut stream = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY")?)
+        .system_prompt("You are helpful.")
+        .user("Hello!")
+        .stream(&http)
+        .await?;
 
     while let Some(event) = stream.next().await {
         match event {
@@ -32,11 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 */
 
-pub mod client;
-pub mod config;
+pub(crate) mod config;
 pub mod error;
 pub mod msg;
-pub mod provider;
+pub(crate) mod provider;
 pub mod raw;
 pub mod request;
 pub mod tool_trait;
@@ -49,13 +49,13 @@ pub mod mcp_server;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-pub use client::LlmClient;
-pub use config::AgentConfig;
 pub use error::ApiError;
 pub use msg::LlmEvent;
-pub use provider::{AnthropicProvider, DeepSeekProvider, GeminiProvider, OpenAIProvider, Provider};
 pub use raw::shared::ToolDefinition;
-pub use request::{ImageContent, ImageData, Message, Request, ResponseFormat, ToolChoice, UserContent, ToolCall};
+pub use request::{
+    ImageContent, ImageData, Message, Provider, Request, ResponseFormat,
+    ToolCall, ToolChoice, UserContent,
+};
 pub use types::{CompleteResponse, UsageStats};
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
 

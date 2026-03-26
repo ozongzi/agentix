@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
 use crate::request::{ImageData, Message, UserContent};
 
@@ -66,85 +67,90 @@ pub enum ToolChoice {
     Tool { name: String },
 }
 
-impl From<crate::request::Request> for Request {
-    fn from(req: crate::request::Request) -> Self {
-        let mut messages: Vec<RequestMessage> = Vec::new();
-        let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
+pub(crate) fn build_anthropic_request(
+    config: &AgentConfig,
+    messages: &[Message],
+    tools: &[ToolDefinition],
+    stream: bool,
+) -> Request {
+    let mut out_messages: Vec<RequestMessage> = Vec::new();
+    let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
 
-        for msg in req.messages {
-            match msg {
-                Message::User(parts) => {
-                    if !pending_tool_results.is_empty() {
-                        messages.push(RequestMessage {
-                            role: "user",
-                            content: MessageContent::Blocks(std::mem::take(&mut pending_tool_results)),
-                        });
-                    }
-                    messages.push(RequestMessage {
+    for msg in messages {
+        match msg {
+            Message::User(parts) => {
+                if !pending_tool_results.is_empty() {
+                    out_messages.push(RequestMessage {
                         role: "user",
-                        content: user_content_from_parts(parts),
+                        content: MessageContent::Blocks(std::mem::take(&mut pending_tool_results)),
                     });
                 }
-                Message::Assistant { content, tool_calls, .. } => {
-                    if tool_calls.is_empty() {
-                        messages.push(RequestMessage {
-                            role: "assistant",
-                            content: MessageContent::Text(content.unwrap_or_default()),
-                        });
-                    } else {
-                        let mut blocks: Vec<ContentBlock> = Vec::new();
-                        if let Some(t) = content && !t.is_empty() {
-                            blocks.push(ContentBlock::Text { text: t });
-                        }
-                        for tc in tool_calls {
-                            let input = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                            blocks.push(ContentBlock::ToolUse { id: tc.id, name: tc.name, input });
-                        }
-                        messages.push(RequestMessage {
-                            role: "assistant",
-                            content: MessageContent::Blocks(blocks),
-                        });
+                out_messages.push(RequestMessage {
+                    role: "user",
+                    content: user_content_from_parts(parts.clone()),
+                });
+            }
+            Message::Assistant { content, tool_calls, .. } => {
+                if tool_calls.is_empty() {
+                    out_messages.push(RequestMessage {
+                        role: "assistant",
+                        content: MessageContent::Text(content.clone().unwrap_or_default()),
+                    });
+                } else {
+                    let mut blocks: Vec<ContentBlock> = Vec::new();
+                    if let Some(t) = content && !t.is_empty() {
+                        blocks.push(ContentBlock::Text { text: t.clone() });
                     }
-                }
-                Message::ToolResult { call_id, content } => {
-                    pending_tool_results.push(ContentBlock::ToolResult {
-                        tool_use_id: call_id,
-                        content,
+                    for tc in tool_calls {
+                        let input = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                        blocks.push(ContentBlock::ToolUse { id: tc.id.clone(), name: tc.name.clone(), input });
+                    }
+                    out_messages.push(RequestMessage {
+                        role: "assistant",
+                        content: MessageContent::Blocks(blocks),
                     });
                 }
             }
+            Message::ToolResult { call_id, content } => {
+                pending_tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: call_id.clone(),
+                    content: content.clone(),
+                });
+            }
         }
-        if !pending_tool_results.is_empty() {
-            messages.push(RequestMessage {
-                role: "user",
-                content: MessageContent::Blocks(pending_tool_results),
-            });
-        }
-
-        let tools = req.tools.map(|ts| {
-            ts.into_iter().map(|t: ToolDefinition| Tool {
-                name: t.function.name,
-                description: t.function.description,
-                input_schema: t.function.parameters,
-            }).collect()
+    }
+    if !pending_tool_results.is_empty() {
+        out_messages.push(RequestMessage {
+            role: "user",
+            content: MessageContent::Blocks(pending_tool_results),
         });
+    }
 
-        let tool_choice = req.tool_choice.map(|tc| match tc {
-            crate::request::ToolChoice::Auto | crate::request::ToolChoice::None => ToolChoice::Auto,
-            crate::request::ToolChoice::Required => ToolChoice::Any,
-            crate::request::ToolChoice::Tool(name) => ToolChoice::Tool { name },
-        });
+    let anthropic_tools: Option<Vec<Tool>> = if tools.is_empty() {
+        None
+    } else {
+        Some(tools.iter().map(|t| Tool {
+            name: t.function.name.clone(),
+            description: t.function.description.clone(),
+            input_schema: t.function.parameters.clone(),
+        }).collect())
+    };
 
-        Request {
-            model: req.model,
-            max_tokens: req.max_tokens.unwrap_or(8192),
-            messages,
-            system: req.system_message.filter(|s| !s.is_empty()),
-            tools,
-            tool_choice,
-            stream: Some(req.stream),
-            temperature: req.temperature,
-        }
+    let tool_choice = if tools.is_empty() {
+        None
+    } else {
+        Some(ToolChoice::Auto)
+    };
+
+    Request {
+        model: config.model.clone(),
+        max_tokens: config.max_tokens.unwrap_or(4096),
+        messages: out_messages,
+        system: config.system_prompt.clone().filter(|s| !s.is_empty()),
+        tools: anthropic_tools,
+        tool_choice,
+        stream: Some(stream),
+        temperature: config.temperature,
     }
 }
 

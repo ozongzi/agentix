@@ -1,0 +1,18 @@
+{
+  "id": "msg_tool1",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_abc123",
+      "name": "get_weather",
+      "input": {"city": "Tokyo", "units": "celsius"}
+    }
+  ],
+  "model": "claude-sonnet-4-20250514",
+  "usage": {
+    "input_tokens": 15,
+    "output_tokens": 12
+  }
+}
