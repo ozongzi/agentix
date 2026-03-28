@@ -331,6 +331,22 @@ impl Request {
         self
     }
 
+    /// Set the response format to plain text (the default).
+    pub fn text(mut self) -> Self {
+        self.response_format = Some(ResponseFormat::Text);
+        self
+    }
+
+    /// Set the response format to JSON object mode.
+    ///
+    /// The model will be constrained to emit a valid JSON object. You must
+    /// also instruct the model to produce JSON in your system prompt or user
+    /// message — the format flag alone is not sufficient for most providers.
+    pub fn json(mut self) -> Self {
+        self.response_format = Some(ResponseFormat::JsonObject);
+        self
+    }
+
     /// Set retry parameters.
     pub fn retries(mut self, max: u32, initial_delay_ms: u64) -> Self {
         self.max_retries = max;

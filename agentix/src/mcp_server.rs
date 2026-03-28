@@ -109,9 +109,10 @@ impl McpServer {
         info!(name = %self.name, version = %self.version, "starting MCP stdio server");
         let handler = McpService::new(self.tools, self.name, self.version);
         let (rx, tx) = rmcp::transport::io::stdio();
-        serve_server(handler, (rx, tx))
+        let running = serve_server(handler, (rx, tx))
             .await
             .map_err(|e| McpServerError::Service(e.to_string()))?;
+        running.waiting().await.ok();
         Ok(())
     }
 
