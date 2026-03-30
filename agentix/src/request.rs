@@ -196,6 +196,14 @@ pub enum Provider {
     OpenAI,
     Anthropic,
     Gemini,
+    /// Moonshot AI (Kimi)
+    Kimi,
+    /// Zhipu AI (ChatGLM)
+    Glm,
+    /// MiniMax
+    Minimax,
+    /// xAI Grok
+    Grok,
 }
 
 impl Provider {
@@ -206,6 +214,10 @@ impl Provider {
             Provider::OpenAI    => "https://api.openai.com/v1",
             Provider::Anthropic => "https://api.anthropic.com",
             Provider::Gemini    => "https://generativelanguage.googleapis.com/v1beta",
+            Provider::Kimi      => "https://api.moonshot.cn/v1",
+            Provider::Glm       => "https://open.bigmodel.cn/api/paas/v4",
+            Provider::Minimax   => "https://api.minimaxi.com/anthropic",
+            Provider::Grok      => "https://api.x.ai/v1",
         }
     }
 
@@ -216,6 +228,10 @@ impl Provider {
             Provider::OpenAI    => "gpt-4o",
             Provider::Anthropic => "claude-sonnet-4-20250514",
             Provider::Gemini    => "gemini-2.0-flash",
+            Provider::Kimi      => "kimi-k2.5",
+            Provider::Glm       => "glm-5",
+            Provider::Minimax   => "MiniMax-M2.7",
+            Provider::Grok      => "grok-4",
         }
     }
 }
@@ -328,6 +344,18 @@ impl Request {
 
     /// Shortcut for `Request::new(Provider::Gemini, api_key)`.
     pub fn gemini(api_key: impl Into<String>) -> Self { Self::new(Provider::Gemini, api_key) }
+
+    /// Shortcut for `Request::new(Provider::Kimi, api_key)`.
+    pub fn kimi(api_key: impl Into<String>) -> Self { Self::new(Provider::Kimi, api_key) }
+
+    /// Shortcut for `Request::new(Provider::Glm, api_key)`.
+    pub fn glm(api_key: impl Into<String>) -> Self { Self::new(Provider::Glm, api_key) }
+
+    /// Shortcut for `Request::new(Provider::Minimax, api_key)`.
+    pub fn minimax(api_key: impl Into<String>) -> Self { Self::new(Provider::Minimax, api_key) }
+
+    /// Shortcut for `Request::new(Provider::Grok, api_key)`.
+    pub fn grok(api_key: impl Into<String>) -> Self { Self::new(Provider::Grok, api_key) }
 
     // ── Builder setters (all consume & return Self) ──────────────────────
 
@@ -473,6 +501,17 @@ impl Request {
                     &self.api_key, http, &config, messages, tools,
                 ).await
             }
+            Provider::Minimax => {
+                crate::raw::anthropic::stream_anthropic(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+            Provider::Kimi | Provider::Glm | Provider::Grok => {
+                use crate::raw::openai::stream_openai_compatible;
+                stream_openai_compatible(
+                    &self.api_key, http, &config, messages, tools, None,
+                ).await
+            }
         }
     }
 
@@ -509,6 +548,17 @@ impl Request {
             Provider::Gemini => {
                 crate::raw::gemini::complete_gemini(
                     &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+            Provider::Minimax => {
+                crate::raw::anthropic::complete_anthropic(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
+            }
+            Provider::Kimi | Provider::Glm | Provider::Grok => {
+                use crate::raw::openai::complete_openai_compatible;
+                complete_openai_compatible(
+                    &self.api_key, http, &config, messages, tools, None,
                 ).await
             }
         }
