@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Providers
 
-Four built-in providers, all using the same API:
+Eight built-in providers, all using the same API:
 
 ```rust
 use agentix::Request;
@@ -76,6 +76,10 @@ let req = Request::deepseek("sk-...");
 let req = Request::openai("sk-...");
 let req = Request::anthropic("sk-ant-...");
 let req = Request::gemini("AIza...");
+let req = Request::kimi("...");       // Moonshot AI — kimi-k2.5
+let req = Request::glm("...");        // Zhipu AI — glm-5
+let req = Request::minimax("...");    // MiniMax — MiniMax-M2.7 (Anthropic API)
+let req = Request::grok("xai-...");
 
 // Any OpenAI-compatible endpoint (e.g. OpenRouter)
 let req = Request::openai("sk-or-...")
