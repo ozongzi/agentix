@@ -152,46 +152,36 @@ pub fn agent(
                     return;
                 }
 
-                // ── Execute tools ─────────────────────────────────────────
-                for tc in &tool_calls_buf {
+                // ── Execute tools concurrently ────────────────────────────
+                let tool_futures: Vec<_> = tool_calls_buf.iter().map(|tc| {
+                    let tools = std::sync::Arc::clone(&tools);
+                    let id = tc.id.clone();
+                    let name = tc.name.clone();
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
-
-                    yield AgentEvent::ToolProgress {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        progress: "executing...".into(),
-                    };
-
-                    let mut tool_stream = tools.call(&tc.name, args).await;
-                    let mut result_val = serde_json::json!(null);
-
-                    while let Some(output) = tool_stream.next().await {
-                        match output {
-                            ToolOutput::Progress(p) => {
-                                yield AgentEvent::ToolProgress {
-                                    id: tc.id.clone(),
-                                    name: tc.name.clone(),
-                                    progress: p,
-                                };
-                            }
-                            ToolOutput::Result(v) => {
-                                result_val = v;
+                    async move {
+                        let mut stream = tools.call(&name, args).await;
+                        let mut result_val = serde_json::json!(null);
+                        let mut progress_events = Vec::new();
+                        while let Some(output) = stream.next().await {
+                            match output {
+                                ToolOutput::Progress(p) => progress_events.push(p),
+                                ToolOutput::Result(v) => result_val = v,
                             }
                         }
+                        (id, name, progress_events, result_val)
                     }
+                }).collect();
 
+                let results = futures::future::join_all(tool_futures).await;
+
+                for (id, name, progress_events, result_val) in results {
+                    for p in progress_events {
+                        yield AgentEvent::ToolProgress { id: id.clone(), name: name.clone(), progress: p };
+                    }
                     let content = result_val.to_string();
-                    yield AgentEvent::ToolResult {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
-                        content: content.clone(),
-                    };
-
-                    history.push(Message::ToolResult {
-                        call_id: tc.id.clone(),
-                        content,
-                    });
+                    yield AgentEvent::ToolResult { id: id.clone(), name: name.clone(), content: content.clone() };
+                    history.push(Message::ToolResult { call_id: id, content });
                 }
                 // Loop back → next LLM request with tool results appended.
             }
