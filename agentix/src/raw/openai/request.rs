@@ -19,7 +19,7 @@ pub struct Request {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response_format: Option<crate::request::ResponseFormat>,
+    pub response_format: Option<crate::raw::shared::ResponseFormat>,
     #[serde(flatten)]
     pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
 }
@@ -120,7 +120,7 @@ pub(crate) fn build_oai_request(
         stream: Some(stream),
         temperature: config.temperature,
         max_tokens: config.max_tokens,
-        response_format: None,
+        response_format: config.response_format.clone().map(crate::raw::shared::ResponseFormat::from),
         extra_body: extra,
     }
 }

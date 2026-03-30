@@ -422,6 +422,7 @@ impl Request {
             Provider::DeepSeek => {
                 use crate::raw::openai::stream_openai_compatible;
                 use crate::raw::deepseek::prepare_history;
+                let config = degrade_json_schema_for_deepseek(config);
                 stream_openai_compatible(
                     &self.api_key, http, &config, messages, tools,
                     Some(prepare_history),
@@ -459,6 +460,7 @@ impl Request {
             Provider::DeepSeek => {
                 use crate::raw::openai::complete_openai_compatible;
                 use crate::raw::deepseek::prepare_history;
+                let config = degrade_json_schema_for_deepseek(config);
                 complete_openai_compatible(
                     &self.api_key, http, &config, messages, tools,
                     Some(prepare_history),
@@ -484,6 +486,7 @@ impl Request {
     }
 
     /// Convert to the legacy `AgentConfig` for internal provider use.
+
     /// This is a temporary bridge until providers are fully migrated.
     fn to_agent_config(&self) -> crate::config::AgentConfig {
         crate::config::AgentConfig {
@@ -493,10 +496,21 @@ impl Request {
             max_tokens: self.max_tokens,
             temperature: self.temperature,
             extra_body: self.extra_body.clone(),
+            response_format: self.response_format.clone(),
             max_retries: self.max_retries,
             retry_delay_ms: self.retry_delay_ms,
         }
     }
+}
+
+/// DeepSeek supports `json_object` but not `json_schema`.
+/// Silently degrade so callers don't have to branch on provider.
+fn degrade_json_schema_for_deepseek(mut config: crate::config::AgentConfig) -> crate::config::AgentConfig {
+    if matches!(config.response_format, Some(ResponseFormat::JsonSchema { .. })) {
+        tracing::warn!("DeepSeek does not support json_schema; degrading to json_object");
+        config.response_format = Some(ResponseFormat::JsonObject);
+    }
+    config
 }
 
 /// Provider-agnostic output-format hint.

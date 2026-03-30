@@ -16,6 +16,8 @@ pub struct AgentConfig {
     pub temperature:   Option<f32>,
     /// Extra JSON fields merged into the request body (provider-specific).
     pub extra_body:    Map<String, Value>,
+    /// Response format constraint (provider support varies).
+    pub response_format: Option<crate::request::ResponseFormat>,
 
     /// Maximum number of retries for transient errors. Default: 3.
     pub max_retries:   u32,
@@ -32,6 +34,7 @@ impl Default for AgentConfig {
             max_tokens:    None,
             temperature:   None,
             extra_body:    Map::new(),
+            response_format: None,
             max_retries:   3,
             retry_delay_ms: 1000,
         }
