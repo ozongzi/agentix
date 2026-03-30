@@ -49,8 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .complete(&http)
         .await?;
 
-    let json_str = response.content.unwrap_or_default();
-    let review: MovieReview = serde_json::from_str(&json_str)?;
+    let review: MovieReview = response.json()?;
 
     println!("Title:   {} ({})", review.title, review.year);
     println!("Rating:  {}/10", review.rating);

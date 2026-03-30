@@ -240,7 +240,7 @@ let response = Request::openai(api_key)
     .complete(&http)
     .await?;
 
-let review: Review = serde_json::from_str(&response.content.unwrap_or_default())?;
+let review: Review = response.json()?;
 ```
 
 See `examples/08_structured_output.rs` for a runnable example.

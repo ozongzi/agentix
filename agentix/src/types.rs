@@ -39,6 +39,16 @@ pub struct CompleteResponse {
     pub usage: UsageStats,
 }
 
+impl CompleteResponse {
+    /// Deserialize the response content as JSON into `T`.
+    ///
+    /// Equivalent to `serde_json::from_str(response.content.unwrap_or_default())`.
+    /// Useful with [`Request::json_schema`] or [`Request::json`].
+    pub fn json<T: serde::de::DeserializeOwned>(&self) -> serde_json::Result<T> {
+        serde_json::from_str(self.content.as_deref().unwrap_or(""))
+    }
+}
+
 // ── Internal provider events ──────────────────────────────────────────────────
 
 /// A tool call fragment emitted during a streaming turn.
