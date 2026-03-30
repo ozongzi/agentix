@@ -238,6 +238,15 @@ let mut bundle = agentix::ToolBundle::new();
 bundle.push(tool);
 ```
 
+### Runtime add / remove
+
+```rust
+let mut bundle = agentix::ToolBundle::default();
+bundle += Calculator;          // AddAssign
+bundle -= "add";               // SubAssign — remove by function name
+let bundle2 = bundle - "multiply";  // Sub — returns new bundle
+```
+
 ---
 
 ## Structured Output
@@ -272,8 +281,9 @@ See `examples/08_structured_output.rs` for a runnable example.
 
 **Provider support:**
 - **OpenAI** — full `json_schema` support (gpt-4o and later)
+- **Gemini** — `responseSchema` + `responseMimeType: application/json` (fully supported)
 - **DeepSeek** — `json_object` only; `json_schema` is automatically degraded with a `tracing::warn`
-- **Anthropic / Gemini** — `response_format` is ignored; use prompt engineering instead
+- **Anthropic** — `response_format` is ignored; use prompt engineering instead
 
 ---
 
