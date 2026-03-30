@@ -256,12 +256,6 @@ pub struct Request {
     /// raw request body (e.g. `prefix`, `thinking`).
     pub extra_body: serde_json::Map<String, serde_json::Value>,
 
-    // ── Agent loop ───────────────────────────────────────────────────────
-
-    /// When used with [`agentix::agent()`], truncate conversation history to
-    /// this many tokens before each LLM request. `None` disables truncation.
-    pub history_budget: Option<usize>,
-
     // ── Retry ────────────────────────────────────────────────────────────
 
     /// Maximum retries for transient errors. Default: 3.
@@ -289,7 +283,6 @@ impl Request {
             max_tokens: None,
             response_format: None,
             extra_body: serde_json::Map::new(),
-            history_budget: None,
             max_retries: 3,
             retry_delay_ms: 1000,
         }
@@ -377,13 +370,6 @@ impl Request {
     /// ```
     pub fn json_schema(mut self, name: impl Into<String>, schema: serde_json::Value, strict: bool) -> Self {
         self.response_format = Some(ResponseFormat::JsonSchema { name: name.into(), schema, strict });
-        self
-    }
-
-    /// Truncate conversation history to this many tokens before each LLM request
-    /// inside [`agentix::agent()`]. Pass `0` or omit to disable truncation.
-    pub fn history_budget(mut self, tokens: usize) -> Self {
-        self.history_budget = if tokens > 0 { Some(tokens) } else { None };
         self
     }
 

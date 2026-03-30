@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Question: (123 + 456) * 789 / 3\n");
 
-    let mut stream = agentix::agent(tools, http, request, history);
+    let mut stream = agentix::agent(tools, http, request, history, Some(25_000));
 
     while let Some(event) = stream.next().await {
         match event {

@@ -163,7 +163,7 @@ async fn divide(a: f64, b: f64) -> Result<f64, String> {
 
 // Combine with + operator
 let tools = add + divide;
-let mut stream = agentix::agent(tools, http, request, history);
+let mut stream = agentix::agent(tools, http, request, history, Some(25_000));
 ```
 
 The macro generates a unit struct with the same name as the function and implements `Tool` for it.
@@ -310,7 +310,7 @@ async fn main() {
     let request = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY").unwrap())
         .system_prompt("You are helpful.");
 
-    let mut stream = agentix::agent(ToolBundle::default(), http, request, vec![]);
+    let mut stream = agentix::agent(ToolBundle::default(), http, request, vec![], None);
     while let Some(event) = stream.next().await {
         match event {
             AgentEvent::Token(t)                          => print!("{t}"),
@@ -345,7 +345,7 @@ async fn main() {
 
 ### 0.9.0
 
-- **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, client, request, history)`
+- **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, client, request, history, history_budget)`
 - **New `AgentEvent` enum** — `Token`, `Reasoning`, `ToolCallChunk`, `ToolCallStart`, `ToolProgress`, `ToolResult`, `Usage`, `Done`, `Warning`, `Error`
 - **`AgentEvent::Done(UsageStats)`** — cumulative token usage across all turns, emitted once on normal completion
 - **Concurrent tool execution** — all tool calls in one LLM turn run in parallel via `select_all`; progress events arrive in real time

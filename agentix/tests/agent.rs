@@ -45,6 +45,7 @@ fn agent_fn_returns_boxstream() {
         reqwest::Client::new(),
         agentix::Request::new(agentix::Provider::OpenAI, "sk-test"),
         vec![],
+        None,
     );
 }
 
@@ -56,6 +57,7 @@ fn agent_fn_accepts_arc_tool() {
         reqwest::Client::new(),
         agentix::Request::new(agentix::Provider::OpenAI, "sk-test"),
         vec![],
+        None,
     );
 }
 

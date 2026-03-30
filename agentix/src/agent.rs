@@ -55,7 +55,7 @@ pub enum AgentEvent {
 /// # async fn run() {
 /// let client = reqwest::Client::new();
 /// let request = Request::new(Provider::OpenAI, "sk-...");
-/// let mut stream = agentix::agent(ToolBundle::default(), client, request, vec![]);
+/// let mut stream = agentix::agent(ToolBundle::default(), client, request, vec![], None);
 /// while let Some(event) = stream.next().await {
 ///     match event {
 ///         AgentEvent::Token(t) => print!("{t}"),
@@ -71,6 +71,7 @@ pub fn agent(
     client: reqwest::Client,
     base_request: Request,
     mut history: Vec<Message>,
+    history_budget: Option<usize>,
 ) -> futures::stream::BoxStream<'static, AgentEvent> {
     let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
     let tool_defs = tools.raw_tools();
@@ -79,7 +80,7 @@ pub fn agent(
         let mut total_usage = UsageStats { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         loop {
                 // ── Truncate history if budget set ────────────────────────
-                if let Some(budget) = base_request.history_budget {
+                if let Some(budget) = history_budget {
                     truncate_to_token_budget(&mut history, budget);
                 }
 
