@@ -106,6 +106,8 @@ pub struct GenerationConfig {
     pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_mime_type: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<serde_json::Value>,
 }
 
 pub(crate) fn build_gemini_request(
@@ -191,12 +193,21 @@ pub(crate) fn build_gemini_request(
         })
     };
 
+    let (response_mime_type, response_schema) = match &config.response_format {
+        Some(crate::request::ResponseFormat::JsonObject) =>
+            (Some("application/json"), None),
+        Some(crate::request::ResponseFormat::JsonSchema { schema, .. }) =>
+            (Some("application/json"), Some(schema.clone())),
+        _ => (None, None),
+    };
     let gc = GenerationConfig {
         temperature:        config.temperature,
         max_output_tokens:  config.max_tokens,
-        response_mime_type: None,
+        response_mime_type,
+        response_schema,
     };
-    let generation_config = if gc.temperature.is_none() && gc.max_output_tokens.is_none() && gc.response_mime_type.is_none() {
+    let generation_config = if gc.temperature.is_none() && gc.max_output_tokens.is_none()
+        && gc.response_mime_type.is_none() && gc.response_schema.is_none() {
         None
     } else {
         Some(gc)

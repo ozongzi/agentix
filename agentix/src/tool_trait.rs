@@ -186,6 +186,20 @@ impl<T: Tool + 'static> std::ops::AddAssign<T> for ToolBundle {
     }
 }
 
+impl std::ops::Sub<&str> for ToolBundle {
+    type Output = ToolBundle;
+    fn sub(mut self, name: &str) -> Self::Output {
+        self.remove(name);
+        self
+    }
+}
+
+impl std::ops::SubAssign<&str> for ToolBundle {
+    fn sub_assign(&mut self, name: &str) {
+        self.remove(name);
+    }
+}
+
 // ── dtolnay trick (autoref specialization) ──────────────────────────────────
 
 #[doc(hidden)]
