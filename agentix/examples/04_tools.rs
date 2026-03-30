@@ -2,25 +2,38 @@ use agentix::{LlmEvent, Request, tool, Tool};
 use futures::StreamExt;
 use std::env;
 
-// Define a struct that will hold our tools
+// ── Style 1: standalone function ─────────────────────────────────────────────
+// #[tool] on a free async fn: generates a unit struct + Tool impl automatically.
+// Use this for quick, one-off tools.
+
+/// Add two numbers together.
+/// a: first number
+/// b: second number
+#[agentix::tool]
+async fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+// ── Style 2: impl block ───────────────────────────────────────────────────────
+// #[tool] on an impl block: multiple tools share one struct.
+// Use this when tools share state (e.g. a DB connection, API client).
+
 struct Calculator;
 
-// The #[tool] macro automatically generates the necessary metadata (JSON schemas)
-// and dispatch code for the LLM to use these functions.
 #[tool]
 impl agentix::Tool for Calculator {
-    /// Add two numbers together.
-    /// a: first number
-    /// b: second number
-    async fn add(&self, a: i64, b: i64) -> i64 {
-        a + b
-    }
-
     /// Multiply two numbers.
     /// a: first number
     /// b: second number
     async fn multiply(&self, a: i64, b: i64) -> i64 {
         a * b
+    }
+
+    /// Divide a by b. Returns an error if b is zero.
+    /// a: dividend
+    /// b: divisor
+    async fn divide(&self, a: f64, b: f64) -> Result<f64, String> {
+        if b == 0.0 { Err("division by zero".into()) } else { Ok(a / b) }
     }
 }
 
@@ -32,17 +45,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let http = reqwest::Client::new();
 
-    // A ToolBundle groups multiple tools together (including MCP tools)
-    let mut bundle = agentix::ToolBundle::new();
-    bundle.push(Calculator);
+    // Combine standalone fns and impl-block structs with the + operator.
+    // Both styles produce the same ToolBundle.
+    let bundle = add + Calculator;
 
     println!("Sending request to OpenAI with calculator tools...");
 
-    // Create the request and attach the tool definitions
     let mut stream = Request::openai(api_key)
         .model("gpt-4o")
         .system_prompt("You are a math assistant. You MUST use your tools to perform calculations.")
-        .user("What is 1234 multiplied by 5678?")
+        .user("What is 1234 multiplied by 5678, then divided by 3?")
         .tools(bundle.raw_tools())
         .stream(&http)
         .await?;

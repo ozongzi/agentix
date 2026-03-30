@@ -140,12 +140,37 @@ let req = Request::new(Provider::DeepSeek, "sk-...")
 
 ## Defining Tools
 
-Annotate `impl Tool for YourStruct` with `#[tool]`. Each method becomes a callable tool.
+Two styles are supported: **standalone function** (simpler) and **impl block** (multiple tools in one struct).
+
+### Standalone function
 
 ```rust
 use agentix::tool;
-use serde_json::{json, Value};
 
+/// Add two numbers.
+/// a: first number
+/// b: second number
+#[agentix::tool]
+async fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+/// Divide a by b.
+#[agentix::tool]
+async fn divide(a: f64, b: f64) -> Result<f64, String> {
+    if b == 0.0 { Err("division by zero".into()) } else { Ok(a / b) }
+}
+
+// Combine with + operator
+let tools = add + divide;
+let mut stream = agentix::agent(tools, 25_000, http, request, history);
+```
+
+The macro generates a unit struct with the same name as the function and implements `Tool` for it.
+
+### Impl block (multiple methods per struct)
+
+```rust
 struct Calculator;
 
 #[tool]
