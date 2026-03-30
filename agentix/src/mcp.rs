@@ -23,11 +23,14 @@
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! use agentix::Agent;
-//! use agentix::McpTool;
+//! use agentix::{McpTool, Request, ToolBundle};
 //!
-//! let agent = agentix::openai("sk-...")
-//!     .tool(McpTool::stdio("npx", &["-y", "@playwright/mcp"]).await?);
+//! let playwright = McpTool::stdio("npx", &["-y", "@playwright/mcp"])
+//!     .await?
+//!     .with_name("playwright");
+//!
+//! let tools = ToolBundle::default() + playwright;
+//! let request = Request::openai(std::env::var("OPENAI_API_KEY")?);
 //! # Ok(()) }
 //! ```
 //!
@@ -37,11 +40,10 @@
 //!
 //! ```no_run
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! use agentix::Agent;
-//! use agentix::McpTool;
+//! use agentix::{McpTool, Request};
 //!
-//! let agent = agentix::openai("sk-...")
-//!     .tool(McpTool::http("https://mcp.example.com/").await?);
+//! let tool = McpTool::http("https://mcp.example.com/").await?.with_name("my_server");
+//! let request = Request::openai(std::env::var("OPENAI_API_KEY")?);
 //! # Ok(()) }
 //! ```
 
@@ -81,7 +83,7 @@ pub enum McpError {
 // ── McpTool ───────────────────────────────────────────────────────────────────
 
 /// An MCP server exposed as a [`Tool`] that can be registered with
-/// [`Agent`][crate::Agent].
+/// [`ToolBundle`][crate::ToolBundle] and used via [`agentix::agent()`][crate::agent].
 ///
 /// The tool list is fetched once at construction time and cached for the
 /// lifetime of the struct.  All calls are forwarded to the underlying MCP
@@ -317,14 +319,6 @@ impl McpTool {
     /// Get the current output limits (useful for debugging).
     pub fn output_limits(&self) -> (Option<usize>, Option<usize>) {
         (self.max_output_chars, self.max_content_items)
-    }
-
-    /// Return the cached list of tool definitions advertised by this MCP server.
-    ///
-    /// This is a convenience inherent method so callers do not need to import
-    /// the [`Tool`] trait just to inspect the tool list.
-    pub fn raw_tools(&self) -> Vec<RawTool> {
-        self.tools.clone()
     }
 
     /// Call `tools/list` (paginating automatically) and convert the MCP tool

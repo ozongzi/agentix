@@ -74,7 +74,6 @@ pub fn agent(
     history_budget: Option<usize>,
 ) -> futures::stream::BoxStream<'static, AgentEvent> {
     let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
-    let tool_defs = tools.raw_tools();
 
     Box::pin(stream! {
         let mut total_usage = UsageStats { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -85,6 +84,7 @@ pub fn agent(
                 }
 
                 // ── Call LLM ──────────────────────────────────────────────
+                let tool_defs = tools.raw_tools();
                 let req = base_request.clone()
                     .messages(history.clone())
                     .tools(tool_defs.clone());

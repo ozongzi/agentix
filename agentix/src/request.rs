@@ -134,12 +134,21 @@ impl Message {
 /// Drop the oldest messages from `history` until the total estimated token
 /// count is at or below `budget`.  Always keeps at least one message.
 pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
-    while history.len() > 1 {
-        let total: usize = history.iter().map(|m| m.estimate_tokens()).sum();
-        if total <= budget {
+    // Scan from the back, accumulating tokens until we exceed the budget.
+    // The first index (from the front) where the suffix fits is the cut point.
+    let mut acc: usize = 0;
+    let mut keep_from = history.len(); // default: keep all
+    for (i, msg) in history.iter().enumerate().rev() {
+        acc += msg.estimate_tokens();
+        if acc > budget {
+            // suffix starting at i+1 fits; drop everything before it,
+            // but always keep at least one message.
+            keep_from = (i + 1).min(history.len() - 1);
             break;
         }
-        history.remove(0);
+    }
+    if keep_from > 0 {
+        history.drain(0..keep_from);
     }
 }
 
