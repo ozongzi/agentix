@@ -19,14 +19,14 @@ agentix = "0.9"
 ## Quick Start
 
 ```rust
-use agentix::{Request, Provider, LlmEvent};
+use agentix::{Request, LlmEvent};
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let http = reqwest::Client::new();
 
-    let mut stream = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY")?)
+    let mut stream = Request::deepseek(std::env::var("DEEPSEEK_API_KEY")?)
         .system_prompt("You are a helpful assistant.")
         .user("What is the capital of France?")
         .stream(&http)
