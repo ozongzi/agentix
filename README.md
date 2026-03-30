@@ -341,57 +341,6 @@ async fn main() {
 
 ---
 
-## Changelog
-
-### 0.9.0
-
-- **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, client, request, history, history_budget)`
-- **New `AgentEvent` enum** — `Token`, `Reasoning`, `ToolCallChunk`, `ToolCallStart`, `ToolProgress`, `ToolResult`, `Usage`, `Done`, `Warning`, `Error`
-- **`AgentEvent::Done(UsageStats)`** — cumulative token usage across all turns, emitted once on normal completion
-- **Concurrent tool execution** — all tool calls in one LLM turn run in parallel via `select_all`; progress events arrive in real time
-- **`Request::deepseek/openai/anthropic/gemini(key)`** — shortcut constructors
-- **`Request::json_schema(name, schema, strict)`** — structured output with JSON Schema
-- **`ToolBundle::remove(name)`** — runtime tool removal
-- **`Arc<dyn Tool>` implements `Tool`** — pass a shared bundle without wrapping
-- **tracing integration** — `debug!` spans around LLM requests and tool execution (no feature flag needed, uses the `tracing` crate)
-
-### 0.8.0
-
-- **Replaced `LlmClient` with `Request`** — self-contained value type with builder pattern
-- **Replaced `Provider` trait with `Provider` enum** — `DeepSeek`, `OpenAI`, `Anthropic`, `Gemini`
-- **Removed shared mutable state** — `Request` is `Clone`, `Send`, `Sync`; caller passes `&reqwest::Client`
-- **Removed `AgentConfig`** from public API — all config lives in `Request` fields
-
-### 0.7.0
-
-- **Removed `Agent` struct** — `LlmClient` is now the sole entry point; callers own the loop
-- **Removed `Memory` trait** — `InMemory`, `SlidingWindow`, `TokenSlidingWindow`, `LlmSummarizer` removed
-- **Removed `AgentEvent` / `AgentInput`** — only `LlmEvent` remains
-- **New `LlmClient::complete()`** — native non-streaming API for all four providers
-- **New `CompleteResponse`** — content, reasoning, tool_calls, usage in one struct
-
-### 0.6.0
-
-- Non-streaming `complete()` method on `Provider` trait
-- `post_json` helper for non-streaming HTTP POST with retry
-- `CompleteResponse` type
-
-### 0.5.0
-
-- `Agent` API with `chat()`, `send()`, `subscribe()`, `add_tool()`, `abort()`, `usage()`
-- Concurrent tool execution via `FuturesUnordered`
-- `SlidingWindow` fix for orphaned tool messages
-- Default HTTP timeouts (10 s connect, 120 s response)
-
-### 0.4.x
-
-- Initial multi-turn API
-- DeepSeek, OpenAI, Anthropic, Gemini providers
-- `#[tool]` and `#[streaming]` macros
-- Memory backends, MCP tool support
-
----
-
 ## License
 
 MIT OR Apache-2.0
