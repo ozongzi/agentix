@@ -70,8 +70,6 @@ pub enum AgentEvent {
 /// ```
 pub struct Agent {
     pub tools: std::sync::Arc<dyn Tool>,
-    /// Maximum number of LLM round-trips before stopping (default: 64).
-    pub max_iterations: usize,
     /// Token budget for history truncation before each LLM request (default: 25_000).
     /// Set to `usize::MAX` to disable truncation.
     pub token_budget: usize,
@@ -79,16 +77,11 @@ pub struct Agent {
 
 impl Agent {
     pub fn new(tools: impl Tool + 'static) -> Self {
-        Self { tools: std::sync::Arc::new(tools), max_iterations: 64, token_budget: 25_000 }
+        Self { tools: std::sync::Arc::new(tools), token_budget: 25_000 }
     }
 
     pub fn from_arc(tools: std::sync::Arc<dyn Tool>) -> Self {
-        Self { tools, max_iterations: 64, token_budget: 25_000 }
-    }
-
-    pub fn max_iterations(mut self, n: usize) -> Self {
-        self.max_iterations = n;
-        self
+        Self { tools, token_budget: 25_000 }
     }
 
     pub fn token_budget(mut self, budget: usize) -> Self {
@@ -114,11 +107,10 @@ impl Agent {
     ) -> futures::stream::BoxStream<'static, AgentEvent> {
         let tools = std::sync::Arc::clone(&self.tools);
         let tool_defs = self.tools.raw_tools();
-        let max_iter = self.max_iterations;
         let token_budget = self.token_budget;
 
         Box::pin(stream! {
-            for _iteration in 0..max_iter {
+            loop {
                 // ── Truncate history to token budget ──────────────────────
                 truncate_to_token_budget(&mut history, token_budget);
 

@@ -281,7 +281,7 @@ async fn main() {
 
 ### 0.9.0
 
-- **New `Agent` struct** — stateless agentic loop: `Agent::new(tools)`, `Agent::from_arc(arc)`, `Agent::max_iterations(n)`
+- **New `Agent` struct** — stateless agentic loop: `Agent::new(tools)`, `Agent::from_arc(arc)`, `Agent::token_budget(n)`
 - **New `AgentEvent` enum** — typed events covering tokens, reasoning, tool calls, tool progress/results, usage, warnings, errors
 - **`Agent::run(client, request, history)`** — returns `BoxStream<'static, AgentEvent>`; moves owned data in, no lifetime parameters
 - **`SpawnSpell` upgraded** — sub-agents now run a full tool-call loop via `Agent::run()` instead of a single LLM request

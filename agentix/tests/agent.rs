@@ -37,22 +37,22 @@ impl Tool for FailTool {
 // ── Construction tests ────────────────────────────────────────────────────────
 
 #[test]
-fn agent_new_default_iterations() {
+fn agent_new_default_token_budget() {
     let agent = Agent::new(ToolBundle::default());
-    assert_eq!(agent.max_iterations, 64);
+    assert_eq!(agent.token_budget, 25_000);
 }
 
 #[test]
-fn agent_max_iterations_builder() {
-    let agent = Agent::new(ToolBundle::default()).max_iterations(10);
-    assert_eq!(agent.max_iterations, 10);
+fn agent_token_budget_builder() {
+    let agent = Agent::new(ToolBundle::default()).token_budget(10_000);
+    assert_eq!(agent.token_budget, 10_000);
 }
 
 #[test]
 fn agent_from_arc() {
     let arc: Arc<dyn Tool> = Arc::new(EchoTool);
     let agent = Agent::from_arc(arc);
-    assert_eq!(agent.max_iterations, 64);
+    assert_eq!(agent.token_budget, 25_000);
 }
 
 #[test]
