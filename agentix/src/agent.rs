@@ -152,35 +152,49 @@ pub fn agent(
                     return;
                 }
 
-                // ── Execute tools concurrently ────────────────────────────
-                let tool_futures: Vec<_> = tool_calls_buf.iter().map(|tc| {
-                    let tools = std::sync::Arc::clone(&tools);
-                    let id = tc.id.clone();
-                    let name = tc.name.clone();
-                    let args: serde_json::Value =
-                        serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
-                    async move {
-                        let mut stream = tools.call(&name, args).await;
-                        let mut result_val = serde_json::json!(null);
-                        let mut progress_events = Vec::new();
-                        while let Some(output) = stream.next().await {
-                            match output {
-                                ToolOutput::Progress(p) => progress_events.push(p),
-                                ToolOutput::Result(v) => result_val = v,
-                            }
+                // ── Execute tools concurrently, real-time progress ────────
+                // Tag each ToolOutput with its call id/name, merge all streams
+                // via select_all, yield events as they arrive.
+                use futures::stream::select_all;
+
+                enum ToolMsg {
+                    Progress { id: String, name: String, msg: String },
+                    Result   { id: String, name: String, value: serde_json::Value },
+                }
+
+                let tagged_streams: Vec<futures::stream::BoxStream<'static, ToolMsg>> =
+                    tool_calls_buf.iter().map(|tc| {
+                        let tools = std::sync::Arc::clone(&tools);
+                        let id   = tc.id.clone();
+                        let name = tc.name.clone();
+                        let args: serde_json::Value =
+                            serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
+                        let stream = futures::stream::once(async move {
+                            tools.call(&name, args).await
+                                .map(move |output| match output {
+                                    ToolOutput::Progress(p) =>
+                                        ToolMsg::Progress { id: id.clone(), name: name.clone(), msg: p },
+                                    ToolOutput::Result(v) =>
+                                        ToolMsg::Result { id: id.clone(), name: name.clone(), value: v },
+                                })
+                        }).flatten();
+                        Box::pin(stream) as futures::stream::BoxStream<'static, ToolMsg>
+                    }).collect();
+
+                let mut merged = select_all(tagged_streams);
+                let mut tool_results: Vec<(String, String)> = Vec::new();
+                while let Some(msg) = merged.next().await {
+                    match msg {
+                        ToolMsg::Progress { id, name, msg } =>
+                            yield AgentEvent::ToolProgress { id, name, progress: msg },
+                        ToolMsg::Result { id, name, value } => {
+                            let content = value.to_string();
+                            yield AgentEvent::ToolResult { id: id.clone(), name, content: content.clone() };
+                            tool_results.push((id, content));
                         }
-                        (id, name, progress_events, result_val)
                     }
-                }).collect();
-
-                let results = futures::future::join_all(tool_futures).await;
-
-                for (id, name, progress_events, result_val) in results {
-                    for p in progress_events {
-                        yield AgentEvent::ToolProgress { id: id.clone(), name: name.clone(), progress: p };
-                    }
-                    let content = result_val.to_string();
-                    yield AgentEvent::ToolResult { id: id.clone(), name: name.clone(), content: content.clone() };
+                }
+                for (id, content) in tool_results {
                     history.push(Message::ToolResult { call_id: id, content });
                 }
                 // Loop back → next LLM request with tool results appended.
