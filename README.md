@@ -1,5 +1,9 @@
 # agentix
 
+[![crates.io](https://img.shields.io/crates/v/agentix.svg)](https://crates.io/crates/agentix)
+[![docs.rs](https://docs.rs/agentix/badge.svg)](https://docs.rs/agentix)
+[![license](https://img.shields.io/crates/l/agentix.svg)](LICENSE)
+
 Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, agentic loops, and MCP support.
 
 DeepSeek · OpenAI · Anthropic · Gemini — one unified API.
