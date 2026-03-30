@@ -137,6 +137,8 @@ pub struct McpTool {
     peer: Arc<Peer<RoleClient>>,
     /// Keep the running service alive for as long as McpTool exists.
     _service: Arc<dyn std::any::Any + Send + Sync>,
+    /// Optional name prefix applied to all tool names: `{name}__{tool}`.
+    name: Option<String>,
     /// Maximum character count for the JSON output string.
     /// Default: 8,000 characters
     max_output_chars: Option<usize>,
@@ -248,6 +250,7 @@ impl McpTool {
             tools,
             peer: Arc::new(peer),
             _service: Arc::new(running),
+            name: None,
             max_output_chars: Some(DEFAULT_MAX_OUTPUT_CHARS),
             max_content_items: Some(DEFAULT_MAX_CONTENT_ITEMS),
             call_timeout: None,
@@ -255,6 +258,13 @@ impl McpTool {
     }
 
     // ── Configuration ─────────────────────────────────────────────────────────
+
+    /// Set a name for this MCP server. All tool names will be prefixed with
+    /// `{name}__` (e.g. `playwright__browser_navigate`).
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
 
     /// Set the maximum character count for the JSON output string.
     ///
@@ -351,12 +361,26 @@ impl McpTool {
 #[async_trait::async_trait]
 impl Tool for McpTool {
     fn raw_tools(&self) -> Vec<RawTool> {
-        self.tools.clone()
+        match &self.name {
+            None => self.tools.clone(),
+            Some(prefix) => self.tools.iter().map(|t| {
+                let mut t = t.clone();
+                t.function.name = format!("{}__{}", prefix, t.function.name);
+                t
+            }).collect(),
+        }
     }
 
     async fn call(&self, name: &str, args: Value) -> futures::stream::BoxStream<'static, crate::tool_trait::ToolOutput> {
+        let real_name = match &self.name {
+            Some(prefix) => {
+                let pfx = format!("{}__", prefix);
+                name.strip_prefix(&pfx).unwrap_or(name)
+            }
+            None => name,
+        };
         let arguments = args.as_object().cloned().map(|m| m.into_iter().collect());
-        let owned_name: std::borrow::Cow<'static, str> = name.to_string().into();
+        let owned_name: std::borrow::Cow<'static, str> = real_name.to_string().into();
 
         let params = match arguments {
             Some(args) => CallToolRequestParams::new(owned_name).with_arguments(args),
