@@ -13,4 +13,4 @@ pub mod gemini;
 pub mod openai;
 pub mod shared;
 
-pub use shared::{FunctionDefinition, FunctionName, ResponseFormat, ResponseFormatKind, ToolChoice, ToolChoiceFunction, ToolChoiceMode, ToolDefinition, ToolKind};
+pub use shared::{FunctionDefinition, FunctionName, JsonSchemaBody, ResponseFormat, ToolChoice, ToolChoiceFunction, ToolChoiceMode, ToolDefinition, ToolKind};

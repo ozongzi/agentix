@@ -361,6 +361,18 @@ impl Request {
         self
     }
 
+    /// Constrain output to a named JSON Schema (OpenAI `json_schema` mode).
+    ///
+    /// Use `schemars::schema_for!(T)` to generate the schema:
+    /// ```ignore
+    /// let schema = serde_json::to_value(schemars::schema_for!(MyStruct)).unwrap();
+    /// let req = Request::openai(key).json_schema("my_struct", schema, true);
+    /// ```
+    pub fn json_schema(mut self, name: impl Into<String>, schema: serde_json::Value, strict: bool) -> Self {
+        self.response_format = Some(ResponseFormat::JsonSchema { name: name.into(), schema, strict });
+        self
+    }
+
     /// Set the response format to JSON object mode.
     ///
     /// The model will be constrained to emit a valid JSON object. You must
@@ -495,4 +507,14 @@ pub enum ResponseFormat {
     Text,
     #[serde(rename = "json_object")]
     JsonObject,
+    /// Strict JSON Schema output (OpenAI `json_schema` mode).
+    /// `schema` should be a `schemars::schema_for!(T)` value serialized to `Value`.
+    JsonSchema {
+        /// Name for the schema (shown in API responses).
+        name: String,
+        /// The JSON Schema object.
+        schema: serde_json::Value,
+        /// Whether to enforce strict schema adherence.
+        strict: bool,
+    },
 }

@@ -215,10 +215,42 @@ bundle.push(tool);
 
 ---
 
+## Structured Output
+
+Constrain the model to emit JSON matching a Rust struct using `Request::json_schema()`.
+Derive `schemars::JsonSchema` on your struct and pass the generated schema:
+
+```rust
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, JsonSchema)]
+struct Review {
+    rating: f32,
+    summary: String,
+    pros: Vec<String>,
+}
+
+let schema = serde_json::to_value(schemars::schema_for!(Review))?;
+
+let response = Request::openai(api_key)
+    .system_prompt("You are a film critic.")
+    .user("Review Inception (2010).")
+    .json_schema("review", schema, true)   // strict=true enforces the schema
+    .complete(&http)
+    .await?;
+
+let review: Review = serde_json::from_str(&response.content.unwrap_or_default())?;
+```
+
+See `examples/08_structured_output.rs` for a runnable example.
+
+---
+
 ## Reliability
 
 - **Automatic retries** — exponential backoff for 429 / 5xx responses
-- **Usage tracking** — per-request token accounting across all providers
+- **Usage tracking** — per-request token accounting across all providers; `AgentEvent::Done` contains cumulative totals across all turns
 
 ---
 
@@ -261,6 +293,7 @@ async fn main() {
 - `ToolProgress { id, name, progress }` — intermediate tool output
 - `ToolResult { id, name, content }` — final tool result
 - `Usage(UsageStats)` — token usage per LLM request
+- `Done(UsageStats)` — emitted once when the loop finishes normally; contains **cumulative** totals across all turns
 - `Warning(String)` — recoverable stream error
 - `Error(String)` — fatal error
 
@@ -273,10 +306,15 @@ async fn main() {
 ### 0.9.0
 
 - **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, token_budget, client, request, history)`
-- **New `AgentEvent` enum** — typed events covering tokens, reasoning, tool calls, tool progress/results, usage, warnings, errors
-- Returns `BoxStream<'static, AgentEvent>`; all args are owned, no lifetime parameters
-- **`Arc<dyn Tool>` implements `Tool`** — pass a shared tool bundle without wrapping
-- **`SpawnSpell` upgraded** — sub-agents now run a full tool-call loop instead of a single LLM request
+- **New `AgentEvent` enum** — `Token`, `Reasoning`, `ToolCallChunk`, `ToolCallStart`, `ToolProgress`, `ToolResult`, `Usage`, `Done`, `Warning`, `Error`
+- **`AgentEvent::Done(UsageStats)`** — cumulative token usage across all turns, emitted once on normal completion
+- **Concurrent tool execution** — all tool calls in one LLM turn run in parallel via `select_all`; progress events arrive in real time
+- **History truncation** — `truncate_to_token_budget` called before every LLM request
+- **`Request::deepseek/openai/anthropic/gemini(key)`** — shortcut constructors
+- **`Request::json_schema(name, schema, strict)`** — structured output with JSON Schema
+- **`ToolBundle::remove(name)`** — runtime tool removal
+- **`Arc<dyn Tool>` implements `Tool`** — pass a shared bundle without wrapping
+- **tracing integration** — `debug!` spans around LLM requests and tool execution (no feature flag needed, uses the `tracing` crate)
 
 ### 0.8.0
 

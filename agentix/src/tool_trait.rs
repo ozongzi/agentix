@@ -81,6 +81,11 @@ impl ToolBundle {
         self.tools.push(tool);
     }
 
+    /// Remove the tool that provides the given function name.
+    pub fn remove(&mut self, name: &str) {
+        self.remove_by_names(&[name.to_string()]);
+    }
+
     /// Remove all tools whose `raw_tools()` contains any of the given names.
     pub fn remove_by_names(&mut self, names: &[String]) {
         let names_set: std::collections::HashSet<&str> =

@@ -1,5 +1,6 @@
 use async_stream::stream;
 use futures::StreamExt;
+use tracing::{debug, warn};
 
 use crate::msg::LlmEvent;
 use crate::request::{Message, Request, ToolCall, truncate_to_token_budget};
@@ -26,6 +27,9 @@ pub enum AgentEvent {
     ToolResult { id: String, name: String, content: String },
     /// Token usage from one LLM request.
     Usage(UsageStats),
+    /// Emitted once when the agent loop finishes normally.
+    /// Contains cumulative token usage across all LLM requests in this run.
+    Done(UsageStats),
     /// A recoverable stream error that was treated as end-of-stream.
     Warning(String),
     /// A fatal error — the stream will end after this.
@@ -74,6 +78,7 @@ pub fn agent(
     let tool_defs = tools.raw_tools();
 
     Box::pin(stream! {
+        let mut total_usage = UsageStats { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         loop {
                 // ── Truncate history to token budget ──────────────────────
                 truncate_to_token_budget(&mut history, token_budget);
@@ -83,6 +88,7 @@ pub fn agent(
                     .messages(history.clone())
                     .tools(tool_defs.clone());
 
+                debug!(history_len = history.len(), tools = tool_defs.len(), "agent: calling LLM");
                 let mut llm_stream = match req.stream(&client).await {
                     Ok(s) => s,
                     Err(e) => {
@@ -120,6 +126,10 @@ pub fn agent(
                         }
 
                         Some(LlmEvent::Usage(u)) => {
+                            total_usage.prompt_tokens     += u.prompt_tokens;
+                            total_usage.completion_tokens += u.completion_tokens;
+                            total_usage.total_tokens      += u.total_tokens;
+                            debug!(prompt = u.prompt_tokens, completion = u.completion_tokens, "agent: LLM usage");
                             yield AgentEvent::Usage(u);
                         }
 
@@ -128,6 +138,7 @@ pub fn agent(
                             let benign = e.contains("Error in input stream")
                                 && !reply_buf.trim().is_empty();
                             if benign {
+                                warn!(error = %e, "agent: benign stream tail error");
                                 yield AgentEvent::Warning(e);
                                 break;
                             }
@@ -149,6 +160,7 @@ pub fn agent(
 
                 // ── No tool calls → generation complete ───────────────────
                 if tool_calls_buf.is_empty() {
+                    yield AgentEvent::Done(total_usage);
                     return;
                 }
 
@@ -162,6 +174,7 @@ pub fn agent(
                     Result   { id: String, name: String, value: serde_json::Value },
                 }
 
+                debug!(count = tool_calls_buf.len(), "agent: executing tools concurrently");
                 let tagged_streams: Vec<futures::stream::BoxStream<'static, ToolMsg>> =
                     tool_calls_buf.iter().map(|tc| {
                         let tools = std::sync::Arc::clone(&tools);

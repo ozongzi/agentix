@@ -93,16 +93,20 @@ pub struct FunctionName {
 
 /// OpenAI-style `response_format` field.
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ResponseFormat {
-    #[serde(rename = "type")]
-    pub kind: ResponseFormatKind,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ResponseFormat {
+    Text,
+    JsonObject,
+    JsonSchema {
+        json_schema: JsonSchemaBody,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum ResponseFormatKind {
-    Text,
-    JsonObject,
+pub struct JsonSchemaBody {
+    pub name: String,
+    pub schema: serde_json::Value,
+    pub strict: bool,
 }
 
 // ── Conversions from provider-agnostic types ──────────────────────────────────
@@ -123,11 +127,11 @@ impl From<crate::request::ToolChoice> for ToolChoice {
 
 impl From<crate::request::ResponseFormat> for ResponseFormat {
     fn from(f: crate::request::ResponseFormat) -> Self {
-        ResponseFormat {
-            kind: match f {
-                crate::request::ResponseFormat::Text       => ResponseFormatKind::Text,
-                crate::request::ResponseFormat::JsonObject => ResponseFormatKind::JsonObject,
-            },
+        match f {
+            crate::request::ResponseFormat::Text       => ResponseFormat::Text,
+            crate::request::ResponseFormat::JsonObject => ResponseFormat::JsonObject,
+            crate::request::ResponseFormat::JsonSchema { name, schema, strict } =>
+                ResponseFormat::JsonSchema { json_schema: JsonSchemaBody { name, schema, strict } },
         }
     }
 }
