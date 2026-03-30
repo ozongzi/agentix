@@ -2,7 +2,7 @@ use async_stream::stream;
 use futures::StreamExt;
 
 use crate::msg::LlmEvent;
-use crate::request::{Message, Request, ToolCall};
+use crate::request::{Message, Request, ToolCall, truncate_to_token_budget};
 use crate::tool_trait::{Tool, ToolOutput};
 use crate::types::UsageStats;
 
@@ -72,19 +72,27 @@ pub struct Agent {
     pub tools: std::sync::Arc<dyn Tool>,
     /// Maximum number of LLM round-trips before stopping (default: 64).
     pub max_iterations: usize,
+    /// Token budget for history truncation before each LLM request (default: 25_000).
+    /// Set to `usize::MAX` to disable truncation.
+    pub token_budget: usize,
 }
 
 impl Agent {
     pub fn new(tools: impl Tool + 'static) -> Self {
-        Self { tools: std::sync::Arc::new(tools), max_iterations: 64 }
+        Self { tools: std::sync::Arc::new(tools), max_iterations: 64, token_budget: 25_000 }
     }
 
     pub fn from_arc(tools: std::sync::Arc<dyn Tool>) -> Self {
-        Self { tools, max_iterations: 64 }
+        Self { tools, max_iterations: 64, token_budget: 25_000 }
     }
 
     pub fn max_iterations(mut self, n: usize) -> Self {
         self.max_iterations = n;
+        self
+    }
+
+    pub fn token_budget(mut self, budget: usize) -> Self {
+        self.token_budget = budget;
         self
     }
 
@@ -107,9 +115,13 @@ impl Agent {
         let tools = std::sync::Arc::clone(&self.tools);
         let tool_defs = self.tools.raw_tools();
         let max_iter = self.max_iterations;
+        let token_budget = self.token_budget;
 
         Box::pin(stream! {
             for _iteration in 0..max_iter {
+                // ── Truncate history to token budget ──────────────────────
+                truncate_to_token_budget(&mut history, token_budget);
+
                 // ── Call LLM ──────────────────────────────────────────────
                 let req = base_request.clone()
                     .messages(history.clone())
