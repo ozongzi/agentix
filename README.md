@@ -4,6 +4,20 @@ Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, age
 
 DeepSeek · OpenAI · Anthropic · Gemini — one unified API.
 
+### vs. rig / llm-chain
+
+| | agentix | rig | llm-chain |
+|---|---|---|---|
+| Agentic loop | ✅ `agent()` built-in | manual | manual |
+| Streaming tool calls | ✅ `#[streaming]` | ❌ | ❌ |
+| MCP support | ✅ | ❌ | ❌ |
+| Proc-macro tools | ✅ `#[tool]` | ✅ `#[tool]` | ❌ |
+| Concurrent tool execution | ✅ | ❌ | ❌ |
+| Provider support | 4 | 10+ | 4 |
+| API style | value-type `Request` | builder | builder |
+
+agentix trades breadth of provider support for depth: built-in agentic loop, real-time streaming tool output, and first-class MCP integration.
+
 ## Installation
 
 ```toml
