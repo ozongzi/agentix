@@ -131,6 +131,18 @@ impl Message {
     }
 }
 
+/// Drop the oldest messages from `history` until the total estimated token
+/// count is at or below `budget`.  Always keeps at least one message.
+pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
+    while history.len() > 1 {
+        let total: usize = history.iter().map(|m| m.estimate_tokens()).sum();
+        if total <= budget {
+            break;
+        }
+        history.remove(0);
+    }
+}
+
 /// A single tool invocation requested by the model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {

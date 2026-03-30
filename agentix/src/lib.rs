@@ -46,6 +46,7 @@ pub mod types;
 pub mod mcp;
 #[cfg(feature = "mcp-server")]
 pub mod mcp_server;
+pub mod agent;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
@@ -54,10 +55,11 @@ pub use msg::LlmEvent;
 pub use raw::shared::ToolDefinition;
 pub use request::{
     ImageContent, ImageData, Message, Provider, Request, ResponseFormat,
-    ToolCall, ToolChoice, UserContent,
+    ToolCall, ToolChoice, UserContent, truncate_to_token_budget,
 };
 pub use types::{CompleteResponse, UsageStats};
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
+pub use agent::{Agent, AgentEvent};
 
 pub use agentix_macros::tool;
 pub use schemars;

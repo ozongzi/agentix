@@ -117,7 +117,20 @@ impl ToolBundle {
 #[async_trait]
 impl Tool for ToolBundle {
     fn raw_tools(&self) -> Vec<RawTool> {
-        self.tools.iter().flat_map(|t| t.raw_tools()).collect()
+        let all: Vec<RawTool> = self.tools.iter().flat_map(|t| t.raw_tools()).collect();
+        // Log duplicates before dedup so the root cause is visible in logs.
+        {
+            let mut counts = std::collections::HashMap::new();
+            for r in &all {
+                *counts.entry(r.function.name.as_str()).or_insert(0u32) += 1;
+            }
+            let dups: Vec<_> = counts.into_iter().filter(|(_, c)| *c > 1).collect();
+            if !dups.is_empty() {
+                eprintln!("[agentix] WARN duplicate tool names in ToolBundle: {:?}", dups);
+            }
+        }
+        let mut seen = std::collections::HashSet::new();
+        all.into_iter().filter(|r| seen.insert(r.function.name.clone())).collect()
     }
 
     async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput> {
