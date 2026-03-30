@@ -1,4 +1,4 @@
-use agentix::{LlmEvent, Provider, Request, tool, Tool};
+use agentix::{LlmEvent, Request, tool, Tool};
 use futures::StreamExt;
 use std::env;
 
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Sending request to OpenAI with calculator tools...");
 
     // Create the request and attach the tool definitions
-    let mut stream = Request::new(Provider::OpenAI, api_key)
+    let mut stream = Request::openai(api_key)
         .model("gpt-4o")
         .system_prompt("You are a math assistant. You MUST use your tools to perform calculations.")
         .user("What is 1234 multiplied by 5678?")

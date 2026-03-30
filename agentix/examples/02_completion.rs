@@ -1,4 +1,4 @@
-use agentix::{Provider, Request};
+use agentix::Request;
 use std::env;
 
 #[tokio::main]
@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The `complete` method waits for the entire response to be generated
     // before returning the final text as a String.
-    let response = Request::new(Provider::OpenAI, api_key)
+    let response = Request::openai(api_key)
         .model("gpt-4o-mini") // Optional: override the default model
         .system_prompt("You are a helpful and concise AI assistant.")
         .user("Explain the theory of relativity in one short sentence.")

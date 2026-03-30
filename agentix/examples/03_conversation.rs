@@ -1,4 +1,4 @@
-use agentix::{ImageContent, ImageData, LlmEvent, Message, Provider, Request, UserContent};
+use agentix::{ImageContent, ImageData, LlmEvent, Message, Request, UserContent};
 use futures::StreamExt;
 use std::env;
 use std::io::{self, Write};
@@ -92,7 +92,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         messages.push(Message::User(user_parts));
 
         // Create the request using the full message history
-        let mut stream = Request::new(Provider::Anthropic, api_key.clone())
+        let mut stream = Request::anthropic(api_key.clone())
             .system_prompt(
                 "You're a helpful assistant that can understand both text and images. Respond to the user's messages accordingly.",
             )

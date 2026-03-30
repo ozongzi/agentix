@@ -1,4 +1,4 @@
-use agentix::{LlmEvent, Provider, Request};
+use agentix::{LlmEvent, Request};
 use futures::StreamExt;
 use std::env;
 
@@ -12,7 +12,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Sending request to DeepSeek...");
 
-    let mut stream = Request::new(Provider::DeepSeek, api_key)
+    let mut stream = Request::deepseek(api_key)
         .system_prompt("You are a helpful and concise AI assistant.")
         .user("Write a short haiku about Rust programming.")
         .stream(&http)
