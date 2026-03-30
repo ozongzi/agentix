@@ -230,24 +230,21 @@ bundle.push(tool);
 
 ## Agent (agentic loop)
 
-`Agent` drives the full LLM ↔ tool-call loop and yields typed `AgentEvent`s.
+`agentix::agent()` drives the full LLM ↔ tool-call loop and yields typed `AgentEvent`s.
 Pass it a `ToolBundle`, a base `Request`, and an initial history — it handles
 repeated LLM calls, tool execution, and history accumulation automatically.
 
 ```rust
-use agentix::{Agent, AgentEvent, Request, Provider, ToolBundle};
+use agentix::{AgentEvent, Request, Provider, ToolBundle};
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() {
     let http = reqwest::Client::new();
-    let agent = Agent::new(ToolBundle::default());
-
-    let history = vec![];
     let request = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY").unwrap())
         .system_prompt("You are helpful.");
 
-    let mut stream = agent.run(http, request, history);
+    let mut stream = agentix::agent(ToolBundle::default(), 25_000, http, request, vec![]);
     while let Some(event) = stream.next().await {
         match event {
             AgentEvent::Token(t)                          => print!("{t}"),
@@ -273,7 +270,7 @@ async fn main() {
 - `Warning(String)` — recoverable stream error
 - `Error(String)` — fatal error
 
-`Agent::run()` returns a `BoxStream<'static, AgentEvent>` — drop it to abort.
+`agentix::agent()` returns a `BoxStream<'static, AgentEvent>` — drop it to abort.
 
 ---
 
@@ -281,10 +278,11 @@ async fn main() {
 
 ### 0.9.0
 
-- **New `Agent` struct** — stateless agentic loop: `Agent::new(tools)`, `Agent::from_arc(arc)`, `Agent::token_budget(n)`
+- **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, token_budget, client, request, history)`
 - **New `AgentEvent` enum** — typed events covering tokens, reasoning, tool calls, tool progress/results, usage, warnings, errors
-- **`Agent::run(client, request, history)`** — returns `BoxStream<'static, AgentEvent>`; moves owned data in, no lifetime parameters
-- **`SpawnSpell` upgraded** — sub-agents now run a full tool-call loop via `Agent::run()` instead of a single LLM request
+- Returns `BoxStream<'static, AgentEvent>`; all args are owned, no lifetime parameters
+- **`Arc<dyn Tool>` implements `Tool`** — pass a shared tool bundle without wrapping
+- **`SpawnSpell` upgraded** — sub-agents now run a full tool-call loop instead of a single LLM request
 
 ### 0.8.0
 

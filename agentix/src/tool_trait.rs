@@ -27,6 +27,16 @@ pub trait Tool: Send + Sync {
     async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput>;
 }
 
+#[async_trait]
+impl Tool for std::sync::Arc<dyn Tool> {
+    fn raw_tools(&self) -> Vec<RawTool> {
+        (**self).raw_tools()
+    }
+    async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput> {
+        (**self).call(name, args).await
+    }
+}
+
 /// A collection of [`Tool`] implementations dispatched by name.
 pub struct ToolBundle {
     tools: Vec<Box<dyn Tool>>,

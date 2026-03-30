@@ -32,85 +32,49 @@ pub enum AgentEvent {
     Error(String),
 }
 
-// ── Agent ─────────────────────────────────────────────────────────────────────
+// ── agent() ───────────────────────────────────────────────────────────────────
 
-/// Stateless generation loop: given a base [`Request`] config and a
-/// [`ToolBundle`], drives the LLM ↔ tool agentic loop and yields
-/// [`AgentEvent`]s.
+/// Drive the LLM ↔ tool agentic loop and yield [`AgentEvent`]s.
 ///
-/// The caller is responsible for:
-/// - Providing and mutating `history` (the conversation so far).
-/// - Deciding when to abort (by dropping the stream).
-/// - Persisting events to a database.
+/// - `tools` — the tool bundle to dispatch tool calls to
+/// - `token_budget` — drop oldest history messages before each request to stay within this token count; pass `usize::MAX` to disable
+/// - `client` — HTTP client (owned, moved into the stream)
+/// - `request` — base request config (system prompt, model, etc.; messages will be set per-turn)
+/// - `history` — initial conversation history (owned, mutated in place as turns proceed)
+///
+/// Drop the returned stream to abort.
 ///
 /// # Example
 /// ```no_run
-/// use agentix::{Agent, AgentEvent, Request, Provider, ToolBundle};
+/// use agentix::{AgentEvent, Request, Provider, ToolBundle};
 /// use futures::StreamExt;
 ///
 /// # async fn run() {
 /// let client = reqwest::Client::new();
 /// let request = Request::new(Provider::OpenAI, "sk-...");
-/// let tools = ToolBundle::default();
-/// let agent = Agent::new(tools);
-/// let history = vec![];
-///
-/// let mut stream = agent.run(client, request, history);
+/// let mut stream = agentix::agent(ToolBundle::default(), 25_000, client, request, vec![]);
 /// while let Some(event) = stream.next().await {
 ///     match event {
 ///         AgentEvent::Token(t) => print!("{t}"),
-///         AgentEvent::ToolResult { name, content, .. } => {
-///             println!("\n[{name}] → {content}");
-///         }
+///         AgentEvent::ToolResult { name, content, .. } => println!("\n[{name}] → {content}"),
 ///         AgentEvent::Error(e) => eprintln!("error: {e}"),
 ///         _ => {}
 ///     }
 /// }
 /// # }
 /// ```
-pub struct Agent {
-    pub tools: std::sync::Arc<dyn Tool>,
-    /// Token budget for history truncation before each LLM request (default: 25_000).
-    /// Set to `usize::MAX` to disable truncation.
-    pub token_budget: usize,
-}
+pub fn agent(
+    tools: impl Tool + 'static,
+    token_budget: usize,
+    client: reqwest::Client,
+    base_request: Request,
+    mut history: Vec<Message>,
+) -> futures::stream::BoxStream<'static, AgentEvent> {
+    let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
+    let tool_defs = tools.raw_tools();
 
-impl Agent {
-    pub fn new(tools: impl Tool + 'static) -> Self {
-        Self { tools: std::sync::Arc::new(tools), token_budget: 25_000 }
-    }
-
-    pub fn from_arc(tools: std::sync::Arc<dyn Tool>) -> Self {
-        Self { tools, token_budget: 25_000 }
-    }
-
-    pub fn token_budget(mut self, budget: usize) -> Self {
-        self.token_budget = budget;
-        self
-    }
-
-    /// Run the agentic loop, yielding [`AgentEvent`]s.
-    ///
-    /// `history` starts with the messages to send and is extended with
-    /// assistant messages and tool results as they are produced.
-    /// The final history is available via [`AgentEvent::Done`] variant — but
-    /// since there is no `Done` variant, the caller can inspect `history`
-    /// after the stream ends (it is returned in `AgentEvent::Finished`).
-    ///
-    /// Takes ownership of `client` and `history`; both are moved into the
-    /// returned stream so the stream is `'static`.
-    pub fn run(
-        &self,
-        client: reqwest::Client,
-        base_request: Request,
-        mut history: Vec<Message>,
-    ) -> futures::stream::BoxStream<'static, AgentEvent> {
-        let tools = std::sync::Arc::clone(&self.tools);
-        let tool_defs = self.tools.raw_tools();
-        let token_budget = self.token_budget;
-
-        Box::pin(stream! {
-            loop {
+    Box::pin(stream! {
+        loop {
                 // ── Truncate history to token budget ──────────────────────
                 truncate_to_token_budget(&mut history, token_budget);
 
@@ -232,5 +196,4 @@ impl Agent {
                 // Loop back → next LLM request with tool results appended.
             }
         })
-    }
 }

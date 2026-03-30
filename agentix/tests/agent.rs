@@ -5,7 +5,7 @@
 //! `Agent::new()` / `Agent::from_arc()` / `Agent::max_iterations()`.
 
 use agentix::tool_trait::Tool;
-use agentix::{Agent, AgentEvent, ToolBundle};
+use agentix::{AgentEvent, ToolBundle};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -37,29 +37,35 @@ impl Tool for FailTool {
 // ── Construction tests ────────────────────────────────────────────────────────
 
 #[test]
-fn agent_new_default_token_budget() {
-    let agent = Agent::new(ToolBundle::default());
-    assert_eq!(agent.token_budget, 25_000);
+fn agent_fn_returns_boxstream() {
+    // Just verify that agentix::agent() compiles and produces a BoxStream.
+    // We don't drive it (would need a real LLM) — type-checking is enough.
+    let _stream = agentix::agent(
+        ToolBundle::default(),
+        25_000,
+        reqwest::Client::new(),
+        agentix::Request::new(agentix::Provider::OpenAI, "sk-test"),
+        vec![],
+    );
 }
 
 #[test]
-fn agent_token_budget_builder() {
-    let agent = Agent::new(ToolBundle::default()).token_budget(10_000);
-    assert_eq!(agent.token_budget, 10_000);
-}
-
-#[test]
-fn agent_from_arc() {
+fn agent_fn_accepts_arc_tool() {
     let arc: Arc<dyn Tool> = Arc::new(EchoTool);
-    let agent = Agent::from_arc(arc);
-    assert_eq!(agent.token_budget, 25_000);
+    let _stream = agentix::agent(
+        arc,
+        usize::MAX,
+        reqwest::Client::new(),
+        agentix::Request::new(agentix::Provider::OpenAI, "sk-test"),
+        vec![],
+    );
 }
 
 #[test]
 fn agent_tool_defs_exposed() {
+    use agentix::tool_trait::Tool as _;
     let bundle = ToolBundle::default() + EchoTool + FailTool;
-    let agent = Agent::new(bundle);
-    let defs = agent.tools.raw_tools();
+    let defs = bundle.raw_tools();
     let names: Vec<&str> = defs.iter().map(|d| d.function.name.as_str()).collect();
     assert!(names.contains(&"echo"), "expected 'echo' in tool defs");
     assert!(names.contains(&"fail"), "expected 'fail' in tool defs");
