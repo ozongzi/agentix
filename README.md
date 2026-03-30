@@ -1,6 +1,6 @@
 # agentix
 
-Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, and MCP support.
+Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, agentic loops, and MCP support.
 
 DeepSeek · OpenAI · Anthropic · Gemini — one unified API.
 
@@ -8,10 +8,10 @@ DeepSeek · OpenAI · Anthropic · Gemini — one unified API.
 
 ```toml
 [dependencies]
-agentix = "0.7"
+agentix = "0.9"
 
 # Optional: Model Context Protocol (MCP) tool support
-# agentix = { version = "0.7", features = ["mcp"] }
+# agentix = { version = "0.9", features = ["mcp"] }
 ```
 
 ---
@@ -228,7 +228,63 @@ bundle.push(tool);
 
 ---
 
+## Agent (agentic loop)
+
+`Agent` drives the full LLM ↔ tool-call loop and yields typed `AgentEvent`s.
+Pass it a `ToolBundle`, a base `Request`, and an initial history — it handles
+repeated LLM calls, tool execution, and history accumulation automatically.
+
+```rust
+use agentix::{Agent, AgentEvent, Request, Provider, ToolBundle};
+use futures::StreamExt;
+
+#[tokio::main]
+async fn main() {
+    let http = reqwest::Client::new();
+    let agent = Agent::new(ToolBundle::default());
+
+    let history = vec![];
+    let request = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY").unwrap())
+        .system_prompt("You are helpful.");
+
+    let mut stream = agent.run(http, request, history);
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::Token(t)                          => print!("{t}"),
+            AgentEvent::ToolCallStart(tc)                 => println!("→ {}({})", tc.name, tc.arguments),
+            AgentEvent::ToolResult { name, content, .. }  => println!("← [{name}] {content}"),
+            AgentEvent::Usage(u)                          => println!("tokens: {}", u.total_tokens),
+            AgentEvent::Error(e)                          => eprintln!("error: {e}"),
+            _ => {}
+        }
+    }
+}
+```
+
+### AgentEvent variants
+
+- `Token(String)` — incremental response text
+- `Reasoning(String)` — thinking trace
+- `ToolCallChunk(ToolCallChunk)` — streaming partial tool call
+- `ToolCallStart(ToolCall)` — complete tool call, about to execute
+- `ToolProgress { id, name, progress }` — intermediate tool output
+- `ToolResult { id, name, content }` — final tool result
+- `Usage(UsageStats)` — token usage per LLM request
+- `Warning(String)` — recoverable stream error
+- `Error(String)` — fatal error
+
+`Agent::run()` returns a `BoxStream<'static, AgentEvent>` — drop it to abort.
+
+---
+
 ## Changelog
+
+### 0.9.0
+
+- **New `Agent` struct** — stateless agentic loop: `Agent::new(tools)`, `Agent::from_arc(arc)`, `Agent::max_iterations(n)`
+- **New `AgentEvent` enum** — typed events covering tokens, reasoning, tool calls, tool progress/results, usage, warnings, errors
+- **`Agent::run(client, request, history)`** — returns `BoxStream<'static, AgentEvent>`; moves owned data in, no lifetime parameters
+- **`SpawnSpell` upgraded** — sub-agents now run a full tool-call loop via `Agent::run()` instead of a single LLM request
 
 ### 0.8.0
 
