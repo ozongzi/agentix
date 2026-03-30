@@ -3,7 +3,7 @@ use futures::StreamExt;
 use tracing::{debug, warn};
 
 use crate::msg::LlmEvent;
-use crate::request::{Message, Request, ToolCall};
+use crate::request::{Message, Request, ToolCall, truncate_to_token_budget};
 use crate::tool_trait::{Tool, ToolOutput};
 use crate::types::UsageStats;
 
@@ -78,6 +78,11 @@ pub fn agent(
     Box::pin(stream! {
         let mut total_usage = UsageStats { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         loop {
+                // ── Truncate history if budget set ────────────────────────
+                if let Some(budget) = base_request.history_budget {
+                    truncate_to_token_budget(&mut history, budget);
+                }
+
                 // ── Call LLM ──────────────────────────────────────────────
                 let req = base_request.clone()
                     .messages(history.clone())
