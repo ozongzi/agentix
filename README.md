@@ -163,7 +163,7 @@ async fn divide(a: f64, b: f64) -> Result<f64, String> {
 
 // Combine with + operator
 let tools = add + divide;
-let mut stream = agentix::agent(tools, 25_000, http, request, history);
+let mut stream = agentix::agent(tools, http, request, history);
 ```
 
 The macro generates a unit struct with the same name as the function and implements `Tool` for it.
@@ -310,7 +310,7 @@ async fn main() {
     let request = Request::new(Provider::DeepSeek, std::env::var("DEEPSEEK_API_KEY").unwrap())
         .system_prompt("You are helpful.");
 
-    let mut stream = agentix::agent(ToolBundle::default(), 25_000, http, request, vec![]);
+    let mut stream = agentix::agent(ToolBundle::default(), http, request, vec![]);
     while let Some(event) = stream.next().await {
         match event {
             AgentEvent::Token(t)                          => print!("{t}"),
@@ -345,11 +345,10 @@ async fn main() {
 
 ### 0.9.0
 
-- **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, token_budget, client, request, history)`
+- **New `agentix::agent()` free function** — stateless agentic loop: `agent(tools, client, request, history)`
 - **New `AgentEvent` enum** — `Token`, `Reasoning`, `ToolCallChunk`, `ToolCallStart`, `ToolProgress`, `ToolResult`, `Usage`, `Done`, `Warning`, `Error`
 - **`AgentEvent::Done(UsageStats)`** — cumulative token usage across all turns, emitted once on normal completion
 - **Concurrent tool execution** — all tool calls in one LLM turn run in parallel via `select_all`; progress events arrive in real time
-- **History truncation** — `truncate_to_token_budget` called before every LLM request
 - **`Request::deepseek/openai/anthropic/gemini(key)`** — shortcut constructors
 - **`Request::json_schema(name, schema, strict)`** — structured output with JSON Schema
 - **`ToolBundle::remove(name)`** — runtime tool removal

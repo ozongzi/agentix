@@ -3,7 +3,7 @@ use futures::StreamExt;
 use tracing::{debug, warn};
 
 use crate::msg::LlmEvent;
-use crate::request::{Message, Request, ToolCall, truncate_to_token_budget};
+use crate::request::{Message, Request, ToolCall};
 use crate::tool_trait::{Tool, ToolOutput};
 use crate::types::UsageStats;
 
@@ -41,10 +41,9 @@ pub enum AgentEvent {
 /// Drive the LLM ↔ tool agentic loop and yield [`AgentEvent`]s.
 ///
 /// - `tools` — the tool bundle to dispatch tool calls to
-/// - `token_budget` — drop oldest history messages before each request to stay within this token count; pass `usize::MAX` to disable
 /// - `client` — HTTP client (owned, moved into the stream)
 /// - `request` — base request config (system prompt, model, etc.; messages will be set per-turn)
-/// - `history` — initial conversation history (owned, mutated in place as turns proceed)
+/// - `history` — initial conversation history; truncate or summarize before passing if needed
 ///
 /// Drop the returned stream to abort.
 ///
@@ -56,7 +55,7 @@ pub enum AgentEvent {
 /// # async fn run() {
 /// let client = reqwest::Client::new();
 /// let request = Request::new(Provider::OpenAI, "sk-...");
-/// let mut stream = agentix::agent(ToolBundle::default(), 25_000, client, request, vec![]);
+/// let mut stream = agentix::agent(ToolBundle::default(), client, request, vec![]);
 /// while let Some(event) = stream.next().await {
 ///     match event {
 ///         AgentEvent::Token(t) => print!("{t}"),
@@ -69,7 +68,6 @@ pub enum AgentEvent {
 /// ```
 pub fn agent(
     tools: impl Tool + 'static,
-    token_budget: usize,
     client: reqwest::Client,
     base_request: Request,
     mut history: Vec<Message>,
@@ -80,9 +78,6 @@ pub fn agent(
     Box::pin(stream! {
         let mut total_usage = UsageStats { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         loop {
-                // ── Truncate history to token budget ──────────────────────
-                truncate_to_token_budget(&mut history, token_budget);
-
                 // ── Call LLM ──────────────────────────────────────────────
                 let req = base_request.clone()
                     .messages(history.clone())

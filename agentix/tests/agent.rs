@@ -42,7 +42,6 @@ fn agent_fn_returns_boxstream() {
     // We don't drive it (would need a real LLM) — type-checking is enough.
     let _stream = agentix::agent(
         ToolBundle::default(),
-        25_000,
         reqwest::Client::new(),
         agentix::Request::new(agentix::Provider::OpenAI, "sk-test"),
         vec![],
@@ -54,7 +53,6 @@ fn agent_fn_accepts_arc_tool() {
     let arc: Arc<dyn Tool> = Arc::new(EchoTool);
     let _stream = agentix::agent(
         arc,
-        usize::MAX,
         reqwest::Client::new(),
         agentix::Request::new(agentix::Provider::OpenAI, "sk-test"),
         vec![],
