@@ -245,6 +245,11 @@ let review: Review = serde_json::from_str(&response.content.unwrap_or_default())
 
 See `examples/08_structured_output.rs` for a runnable example.
 
+**Provider support:**
+- **OpenAI** — full `json_schema` support (gpt-4o and later)
+- **DeepSeek** — `json_object` only; `json_schema` is automatically degraded with a `tracing::warn`
+- **Anthropic / Gemini** — `response_format` is ignored; use prompt engineering instead
+
 ---
 
 ## Reliability
