@@ -189,6 +189,27 @@ impl McpTool {
         .await
     }
 
+    /// Connect to an MCP server by spawning a child process with a specified working directory.
+    #[instrument(skip(args, cwd), fields(program = program.as_ref()))]
+    pub async fn stdio_with_cwd(
+        program: impl AsRef<str>,
+        args: &[impl AsRef<str>],
+        cwd: impl AsRef<std::path::Path>,
+    ) -> Result<Self, McpError> {
+        let mut cmd = Command::new(program.as_ref());
+        for arg in args {
+            cmd.arg(arg.as_ref());
+        }
+        cmd.current_dir(cwd);
+        let transport = TokioChildProcess::new(cmd)?;
+        Self::from_service(
+            ().serve(transport)
+                .await
+                .map_err(|e| McpError::Init(e.to_string()))?,
+        )
+        .await
+    }
+
     /// Connect to a remote MCP server over Streamable HTTP.
     ///
     /// `url` is the base URL of the MCP server

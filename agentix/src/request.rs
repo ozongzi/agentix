@@ -133,20 +133,40 @@ impl Message {
 
 /// Drop the oldest messages from `history` until the total estimated token
 /// count is at or below `budget`.  Always keeps at least one message.
+///
+/// After finding the cut point, advances it forward past any leading
+/// `ToolResult` messages so that `Assistant { tool_calls }` / `ToolResult`
+/// pairs are never split — which would cause provider errors.
 pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
     // Scan from the back, accumulating tokens until we exceed the budget.
-    // The first index (from the front) where the suffix fits is the cut point.
     let mut acc: usize = 0;
-    let mut keep_from = history.len(); // default: keep all
+    let mut keep_from = history.len(); // default: keep all (no truncation needed)
     for (i, msg) in history.iter().enumerate().rev() {
         acc += msg.estimate_tokens();
         if acc > budget {
-            // suffix starting at i+1 fits; drop everything before it,
-            // but always keep at least one message.
             keep_from = (i + 1).min(history.len() - 1);
             break;
         }
     }
+
+    // If keep_from == history.len(), history fits within budget — nothing to do.
+    if keep_from == history.len() {
+        return;
+    }
+
+    // Advance keep_from past any orphaned ToolResult messages so we never
+    // start the history mid-tool-call-group.
+    while keep_from < history.len() {
+        match &history[keep_from] {
+            Message::ToolResult { .. } => keep_from += 1,
+            _ => break,
+        }
+    }
+    // Safety: always keep at least one message.
+    if keep_from >= history.len() {
+        keep_from = history.len().saturating_sub(1);
+    }
+
     if keep_from > 0 {
         history.drain(0..keep_from);
     }
