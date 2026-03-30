@@ -186,17 +186,19 @@ impl<T: Tool + 'static> std::ops::AddAssign<T> for ToolBundle {
     }
 }
 
-impl std::ops::Sub<&str> for ToolBundle {
+impl<T: Tool + 'static> std::ops::Sub<T> for ToolBundle {
     type Output = ToolBundle;
-    fn sub(mut self, name: &str) -> Self::Output {
-        self.remove(name);
+    fn sub(mut self, rhs: T) -> Self::Output {
+        let names: Vec<String> = rhs.raw_tools().into_iter().map(|r| r.function.name).collect();
+        self.remove_by_names(&names);
         self
     }
 }
 
-impl std::ops::SubAssign<&str> for ToolBundle {
-    fn sub_assign(&mut self, name: &str) {
-        self.remove(name);
+impl<T: Tool + 'static> std::ops::SubAssign<T> for ToolBundle {
+    fn sub_assign(&mut self, rhs: T) {
+        let names: Vec<String> = rhs.raw_tools().into_iter().map(|r| r.function.name).collect();
+        self.remove_by_names(&names);
     }
 }
 

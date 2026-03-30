@@ -242,9 +242,9 @@ bundle.push(tool);
 
 ```rust
 let mut bundle = agentix::ToolBundle::default();
-bundle += Calculator;          // AddAssign
-bundle -= "add";               // SubAssign — remove by function name
-let bundle2 = bundle - "multiply";  // Sub — returns new bundle
+bundle += Calculator;          // AddAssign — add tool in-place
+bundle -= Calculator;          // SubAssign — remove all functions Calculator provides
+let bundle2 = bundle + Calculator - Calculator;  // Sub — returns new bundle
 ```
 
 ---
