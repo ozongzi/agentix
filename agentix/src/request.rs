@@ -288,6 +288,18 @@ impl Request {
         }
     }
 
+    /// Shortcut for `Request::new(Provider::DeepSeek, api_key)`.
+    pub fn deepseek(api_key: impl Into<String>) -> Self { Self::new(Provider::DeepSeek, api_key) }
+
+    /// Shortcut for `Request::new(Provider::OpenAI, api_key)`.
+    pub fn openai(api_key: impl Into<String>) -> Self { Self::new(Provider::OpenAI, api_key) }
+
+    /// Shortcut for `Request::new(Provider::Anthropic, api_key)`.
+    pub fn anthropic(api_key: impl Into<String>) -> Self { Self::new(Provider::Anthropic, api_key) }
+
+    /// Shortcut for `Request::new(Provider::Gemini, api_key)`.
+    pub fn gemini(api_key: impl Into<String>) -> Self { Self::new(Provider::Gemini, api_key) }
+
     // ── Builder setters (all consume & return Self) ──────────────────────
 
     /// Override the base URL.

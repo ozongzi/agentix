@@ -7,7 +7,7 @@
 //! Run with:
 //!   OPENAI_API_KEY=sk-... cargo run --example 07_agent
 
-use agentix::{AgentEvent, Message, Provider, Request, ToolBundle, UserContent, tool};
+use agentix::{AgentEvent, Message, Request, ToolBundle, UserContent, tool};
 use futures::StreamExt;
 use std::env;
 
@@ -47,19 +47,16 @@ impl agentix::Tool for Calculator {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (provider, api_key) = if let Ok(k) = env::var("DEEPSEEK_API_KEY") {
-        (Provider::DeepSeek, k)
+    let request = if let Ok(k) = env::var("DEEPSEEK_API_KEY") {
+        Request::deepseek(k)
     } else if let Ok(k) = env::var("OPENAI_API_KEY") {
-        (Provider::OpenAI, k)
+        Request::openai(k)
     } else {
         panic!("Set DEEPSEEK_API_KEY or OPENAI_API_KEY");
-    };
+    }.system_prompt("You are a math assistant. Use your tools to compute exact results.");
 
     let http = reqwest::Client::new();
     let tools = ToolBundle::default() + Calculator;
-
-    let request = Request::new(provider, api_key)
-        .system_prompt("You are a math assistant. Use your tools to compute exact results.");
 
     let history = vec![
         Message::User(vec![UserContent::Text(
