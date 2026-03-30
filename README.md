@@ -51,22 +51,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Four built-in providers, all using the same API:
 
 ```rust
-use agentix::{Request, Provider};
+use agentix::Request;
 
-// DeepSeek  (default model: deepseek-chat)
-let req = Request::new(Provider::DeepSeek, "sk-...");
-
-// OpenAI  (default model: gpt-4o)
-let req = Request::new(Provider::OpenAI, "sk-...");
-
-// Anthropic / Claude  (default model: claude-sonnet-4-20250514)
-let req = Request::new(Provider::Anthropic, "sk-ant-...");
-
-// Gemini  (default model: gemini-2.0-flash)
-let req = Request::new(Provider::Gemini, "AIza...");
+// Shortcut constructors (provider + default model in one call)
+let req = Request::deepseek("sk-...");
+let req = Request::openai("sk-...");
+let req = Request::anthropic("sk-ant-...");
+let req = Request::gemini("AIza...");
 
 // Any OpenAI-compatible endpoint (e.g. OpenRouter)
-let req = Request::new(Provider::OpenAI, "sk-or-...")
+let req = Request::openai("sk-or-...")
     .base_url("https://openrouter.ai/api/v1")
     .model("openrouter/free");
 ```
