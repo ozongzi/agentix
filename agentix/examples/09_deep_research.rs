@@ -102,9 +102,9 @@ mod deep_research {
              up-to-date information. Search for the question, read the most relevant pages, \
              then summarize the key findings in 3-5 bullet points. Be factual and concise.",
         );
-        let history = vec![Message::User(vec![UserContent::Text(format!(
+        let history = vec![Message::User(vec![UserContent::Text { text: format!(
             "Research question: {question}\n\nSearch for this and summarize the key findings."
-        ))])];
+        ) }])];
 
         let result = agent_turns(tools, http, request, history, Some(25_000)).last_content().await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
@@ -131,9 +131,9 @@ mod deep_research {
              identify key themes, connections, contradictions, and gaps. Produce a structured \
              analysis that will serve as the foundation for a final report.",
         );
-        let history = vec![Message::User(vec![UserContent::Text(format!(
+        let history = vec![Message::User(vec![UserContent::Text { text: format!(
             "Synthesize these research findings into a coherent analysis:\n{context}"
-        ))])];
+        ) }])];
 
         let result = agent_turns(ToolBundle::default(), http.clone(), request, history, Some(25_000)).last_content().await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
@@ -157,9 +157,9 @@ mod deep_research {
              for each key topic, and a conclusion. Then save it using the save_report tool \
              with filename 'research_report.md'.",
         );
-        let history = vec![Message::User(vec![UserContent::Text(format!(
+        let history = vec![Message::User(vec![UserContent::Text { text: format!(
             "Topic: {topic}\n\nAnalysis to turn into a report:\n{analysis}"
-        ))])];
+        ) }])];
 
         let result = agent_turns(tools, http.clone(), request, history, Some(25_000)).last_content().await;
         eprintln!("\n╚══════════════════════════════════════════════════════");

@@ -59,9 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tools = ToolBundle::default() + Calculator;
 
     let history = vec![
-        Message::User(vec![UserContent::Text(
-            "What is (123 + 456) * 789 / 3?".into(),
-        )]),
+        Message::User(vec![UserContent::Text { text: "What is (123 + 456) * 789 / 3?".into() }]),
     ];
 
     println!("Question: (123 + 456) * 789 / 3\n");

@@ -7,7 +7,7 @@ use agentix::{Provider, Request};
 use serde_json::json;
 
 fn user_msg(text: &str) -> Message {
-    Message::User(vec![UserContent::Text(text.into())])
+    Message::User(vec![UserContent::Text { text: text.into() }])
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

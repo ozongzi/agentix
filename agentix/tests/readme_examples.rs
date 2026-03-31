@@ -64,7 +64,7 @@ fn builder_methods() {
         .user("Hello!")
         .message(msg)
         .messages(vec![
-            Message::User(vec![UserContent::Text("test".into())]),
+            Message::User(vec![UserContent::Text { text: "test".into() }]),
         ])
         .tools(vec![]);
 
