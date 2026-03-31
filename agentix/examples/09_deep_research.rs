@@ -108,9 +108,9 @@ mod deep_research {
         ))])];
 
         let mut s = agent_turns(tools, http, request, history, Some(25_000));
-        let mut last = None;
-        while let Some(item) = s.next().await { last = Some(item); }
-        let result = last.and_then(Result::ok).and_then(|r| r.content).unwrap_or_default();
+        let mut last = None::<agentix::CompleteResponse>;
+        while let Some(Ok(r)) = s.next().await { last = Some(r); }
+        let result = last.and_then(|r| r.content).unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -140,9 +140,9 @@ mod deep_research {
         ))])];
 
         let mut s = agent_turns(ToolBundle::default(), http.clone(), request, history, Some(25_000));
-        let mut last = None;
-        while let Some(item) = s.next().await { last = Some(item); }
-        let result = last.and_then(Result::ok).and_then(|r| r.content).unwrap_or_default();
+        let mut last = None::<agentix::CompleteResponse>;
+        while let Some(Ok(r)) = s.next().await { last = Some(r); }
+        let result = last.and_then(|r| r.content).unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -169,9 +169,9 @@ mod deep_research {
         ))])];
 
         let mut s = agent_turns(tools, http.clone(), request, history, Some(25_000));
-        let mut last = None;
-        while let Some(item) = s.next().await { last = Some(item); }
-        let result = last.and_then(Result::ok).and_then(|r| r.content).unwrap_or_default();
+        let mut last = None::<agentix::CompleteResponse>;
+        while let Some(Ok(r)) = s.next().await { last = Some(r); }
+        let result = last.and_then(|r| r.content).unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
