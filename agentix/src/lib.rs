@@ -71,4 +71,4 @@ pub use futures;
 #[cfg(feature = "mcp")]
 pub use mcp::McpTool;
 #[cfg(feature = "mcp-server")]
-pub use mcp_server::{McpServer, McpServerError};
+pub use mcp_server::{McpServer, McpServerError, McpService};

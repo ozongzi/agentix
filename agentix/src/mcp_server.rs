@@ -175,14 +175,14 @@ impl McpServer {
 // ── McpService ────────────────────────────────────────────────────────────────
 
 /// Internal implementation of the MCP `ServerHandler` trait.
-struct McpService {
+pub struct McpService {
     tools: Arc<ToolBundle>,
     name: String,
     version: String,
 }
 
 impl McpService {
-    fn new(tools: ToolBundle, name: String, version: String) -> Self {
+    pub fn new(tools: ToolBundle, name: String, version: String) -> Self {
         Self {
             tools: Arc::new(tools),
             name,
@@ -190,7 +190,7 @@ impl McpService {
         }
     }
 
-    fn new_shared(tools: Arc<ToolBundle>, name: String, version: String) -> Self {
+    pub fn new_shared(tools: Arc<ToolBundle>, name: String, version: String) -> Self {
         Self { tools, name, version }
     }
 }

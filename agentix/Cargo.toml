@@ -1,6 +1,6 @@
 [package]
 name = "agentix"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2024"
 description = "Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, MCP, DeepSeek, OpenAI, Anthropic, Gemini"
 authors = ["ozongzi <ozongzi@icloud.com>"]
