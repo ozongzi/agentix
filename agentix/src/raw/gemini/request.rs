@@ -134,7 +134,7 @@ pub(crate) fn build_gemini_request(
                 contents.push(Content {
                     role: "user",
                     parts: parts.iter().map(|p| match p {
-                        UserContent::Text(t) => Part::Text(t.clone()),
+                        UserContent::Text { text: t } => Part::Text(t.clone()),
                         UserContent::Image(img) => Part::InlineData(Blob {
                             mime_type: img.mime_type.clone(),
                             data: match &img.data {

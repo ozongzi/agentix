@@ -155,14 +155,14 @@ pub(crate) fn build_anthropic_request(
 }
 
 fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
-    if parts.len() == 1 && matches!(&parts[0], UserContent::Text(_)) {
-        if let UserContent::Text(t) = parts.into_iter().next().unwrap() {
+    if parts.len() == 1 && matches!(&parts[0], UserContent::Text { .. }) {
+        if let UserContent::Text { text: t } = parts.into_iter().next().unwrap() {
             return MessageContent::Text(t);
         }
         unreachable!()
     }
     let blocks = parts.into_iter().map(|p| match p {
-        UserContent::Text(t) => ContentBlock::Text { text: t },
+        UserContent::Text { text: t } => ContentBlock::Text { text: t },
         UserContent::Image(img) => ContentBlock::Image {
             source: match img.data {
                 ImageData::Base64(data) => ImageSource::Base64 { media_type: img.mime_type, data },

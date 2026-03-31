@@ -57,18 +57,18 @@ pub enum ImageData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UserContent {
-    Text(String),
+    Text { text: String },
     Image(ImageContent),
 }
 
 impl From<&str> for UserContent {
     fn from(s: &str) -> Self {
-        UserContent::Text(s.to_string())
+        UserContent::Text { text: s.to_string() }
     }
 }
 impl From<String> for UserContent {
     fn from(s: String) -> Self {
-        UserContent::Text(s)
+        UserContent::Text { text: s }
     }
 }
 
@@ -108,7 +108,7 @@ impl Message {
                 tokens += 4; // overhead for role
                 for part in parts {
                     match part {
-                        UserContent::Text(t) => tokens += bpe.encode_with_special_tokens(t).len(),
+                        UserContent::Text { text: t } => tokens += bpe.encode_with_special_tokens(t).len(),
                         UserContent::Image(_) => tokens += 1000, // rough fixed cost for images
                     }
                 }
@@ -385,7 +385,7 @@ impl Request {
 
     /// Append a user text message (convenience).
     pub fn user(self, text: impl Into<String>) -> Self {
-        self.message(Message::User(vec![UserContent::Text(text.into())]))
+        self.message(Message::User(vec![UserContent::Text { text: text.into() }]))
     }
 
     /// Set the full message history.

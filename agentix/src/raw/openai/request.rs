@@ -127,7 +127,7 @@ pub(crate) fn build_oai_request(
 
 fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {
     let mut blocks: Vec<ContentPart> = parts.into_iter().map(|p| match p {
-        UserContent::Text(t) => ContentPart::Text { text: t },
+        UserContent::Text { text: t } => ContentPart::Text { text: t },
         UserContent::Image(img) => {
             let url = match img.data {
                 ImageData::Url(u)    => u,
