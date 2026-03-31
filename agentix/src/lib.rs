@@ -59,7 +59,7 @@ pub use request::{
 };
 pub use types::{CompleteResponse, UsageStats};
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
-pub use agent::{AgentEvent, AgentTurnsExt, AgentTurnsContentExt, agent, agent_turns};
+pub use agent::{AgentEvent, AgentTurnsStream, agent, agent_turns};
 
 pub use agentix_macros::tool;
 pub use schemars;

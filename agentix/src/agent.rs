@@ -254,10 +254,10 @@ pub fn agent_turns(
     base_request: Request,
     mut history: Vec<Message>,
     history_budget: Option<usize>,
-) -> futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, String>> {
+) -> AgentTurnsStream {
     let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
 
-    Box::pin(stream! {
+    AgentTurnsStream(Box::pin(stream! {
         loop {
             if let Some(budget) = history_budget {
                 truncate_to_token_budget(&mut history, budget);
@@ -319,58 +319,47 @@ pub fn agent_turns(
             }
             // Loop → next turn
         }
-    })
+    }))
 }
 
-// ── AgentTurnsExt ─────────────────────────────────────────────────────────────
+// ── AgentTurnsStream ──────────────────────────────────────────────────────────
 
-/// Convenience extension for `BoxStream<'_, Result<T, E>>` streams.
+/// The stream returned by [`agent_turns`].
 ///
-/// Works around the `Sized` bound on `StreamExt::last()` / `fold()` which
-/// prevents calling them directly on `Pin<Box<dyn Stream<...>>>`.
-pub trait AgentTurnsExt<T, E> {
-    /// Drain the stream and return the last successful (`Ok`) item, or `None`
-    /// if the stream was empty or every item was `Err`.
-    fn last_ok(self) -> impl std::future::Future<Output = Option<T>> + Send;
-}
+/// Implements [`futures::Stream`] so you can drive it with `while let` /
+/// `StreamExt` methods when you need per-turn control, and also provides
+/// convenience methods for the common case of just wanting the final result.
+pub struct AgentTurnsStream(futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, String>>);
 
-impl<T, E> AgentTurnsExt<T, E> for futures::stream::BoxStream<'static, Result<T, E>>
-where
-    T: Send + 'static,
-    E: Send + 'static,
-{
-    fn last_ok(mut self) -> impl std::future::Future<Output = Option<T>> + Send {
-        async move {
-            let mut last = None;
-            while let Some(item) = self.next().await {
-                if let Ok(v) = item {
-                    last = Some(v);
-                }
-            }
-            last
+impl AgentTurnsStream {
+    /// Drain the stream and return the last successful turn's [`crate::types::CompleteResponse`],
+    /// or `None` if every turn errored or the stream was empty.
+    pub async fn last_ok(mut self) -> Option<crate::types::CompleteResponse> {
+        let mut last = None;
+        while let Some(item) = self.next().await {
+            if let Ok(v) = item { last = Some(v); }
         }
+        last
+    }
+
+    /// Drain the stream and return the text content of the last successful turn.
+    /// Returns an empty `String` if every turn errored or the final response had no content.
+    pub async fn last_content(mut self) -> String {
+        let mut last = None;
+        while let Some(item) = self.next().await {
+            if let Ok(v) = item { last = Some(v); }
+        }
+        last.and_then(|r| r.content).unwrap_or_default()
     }
 }
 
-/// Extension for `agent_turns()` streams — provides ergonomic final-text extraction.
-pub trait AgentTurnsContentExt {
-    /// Drain the stream and return the text content of the last successful turn,
-    /// or an empty `String` if the stream errored or the final response had no content.
-    fn last_content(self) -> impl std::future::Future<Output = String> + Send;
-}
+impl futures::Stream for AgentTurnsStream {
+    type Item = Result<crate::types::CompleteResponse, String>;
 
-impl AgentTurnsContentExt
-    for futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, String>>
-{
-    fn last_content(mut self) -> impl std::future::Future<Output = String> + Send {
-        async move {
-            let mut last = None;
-            while let Some(item) = self.next().await {
-                if let Ok(v) = item {
-                    last = Some(v);
-                }
-            }
-            last.and_then(|r| r.content).unwrap_or_default()
-        }
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::pin::Pin::new(&mut self.0).poll_next(cx)
     }
 }

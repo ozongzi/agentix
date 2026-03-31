@@ -21,7 +21,7 @@
 
 #[cfg(feature = "mcp")]
 mod deep_research {
-    use agentix::{AgentTurnsContentExt, McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_turns, tool};
+    use agentix::{McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_turns, tool};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
