@@ -237,10 +237,14 @@ pub fn agent(
 /// let client = reqwest::Client::new();
 /// let request = Request::new(Provider::OpenAI, "sk-...");
 ///
-/// // Just the final answer:
+/// // Just the final text:
+/// let text = agentix::agent_turns(ToolBundle::default(), client.clone(), request.clone(), vec![], None)
+///     .last_content().await;
+/// println!("{text}");
+///
+/// // Full response (with usage, tool_calls, etc.):
 /// let response = agentix::agent_turns(ToolBundle::default(), client.clone(), request.clone(), vec![], None)
-///     .last().await.unwrap().unwrap();
-/// println!("{}", response.content.unwrap_or_default());
+///     .last_ok().await;
 ///
 /// // With per-turn progress:
 /// let mut stream = agentix::agent_turns(ToolBundle::default(), client, request, vec![], None);
@@ -333,6 +337,12 @@ pub fn agent_turns(
 pub struct AgentTurnsStream(futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, ApiError>>);
 
 impl AgentTurnsStream {
+    #[doc(hidden)]
+    pub fn from_items(items: Vec<Result<crate::types::CompleteResponse, ApiError>>) -> Self {
+        use futures::stream;
+        AgentTurnsStream(Box::pin(stream::iter(items)))
+    }
+
     /// Drain the stream and return the last successful turn's [`crate::types::CompleteResponse`],
     /// or `None` if every turn errored or the stream was empty.
     pub async fn last_ok(mut self) -> Option<crate::types::CompleteResponse> {
