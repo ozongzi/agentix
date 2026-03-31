@@ -21,7 +21,7 @@
 
 #[cfg(feature = "mcp")]
 mod deep_research {
-    use agentix::{AgentTurnsExt, McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_turns, tool};
+    use agentix::{AgentTurnsContentExt, McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_turns, tool};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
@@ -106,8 +106,7 @@ mod deep_research {
             "Research question: {question}\n\nSearch for this and summarize the key findings."
         ))])];
 
-        let result = agent_turns(tools, http, request, history, Some(25_000))
-            .last_ok().await.and_then(|r| r.content).unwrap_or_default();
+        let result = agent_turns(tools, http, request, history, Some(25_000)).last_content().await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -136,8 +135,7 @@ mod deep_research {
             "Synthesize these research findings into a coherent analysis:\n{context}"
         ))])];
 
-        let result = agent_turns(ToolBundle::default(), http.clone(), request, history, Some(25_000))
-            .last_ok().await.and_then(|r| r.content).unwrap_or_default();
+        let result = agent_turns(ToolBundle::default(), http.clone(), request, history, Some(25_000)).last_content().await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -163,8 +161,7 @@ mod deep_research {
             "Topic: {topic}\n\nAnalysis to turn into a report:\n{analysis}"
         ))])];
 
-        let result = agent_turns(tools, http.clone(), request, history, Some(25_000))
-            .last_ok().await.and_then(|r| r.content).unwrap_or_default();
+        let result = agent_turns(tools, http.clone(), request, history, Some(25_000)).last_content().await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }

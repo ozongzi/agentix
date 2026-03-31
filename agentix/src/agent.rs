@@ -351,3 +351,26 @@ where
         }
     }
 }
+
+/// Extension for `agent_turns()` streams — provides ergonomic final-text extraction.
+pub trait AgentTurnsContentExt {
+    /// Drain the stream and return the text content of the last successful turn,
+    /// or an empty `String` if the stream errored or the final response had no content.
+    fn last_content(self) -> impl std::future::Future<Output = String> + Send;
+}
+
+impl AgentTurnsContentExt
+    for futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, String>>
+{
+    fn last_content(mut self) -> impl std::future::Future<Output = String> + Send {
+        async move {
+            let mut last = None;
+            while let Some(item) = self.next().await {
+                if let Ok(v) = item {
+                    last = Some(v);
+                }
+            }
+            last.and_then(|r| r.content).unwrap_or_default()
+        }
+    }
+}
