@@ -8,6 +8,34 @@ Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, age
 
 DeepSeek · OpenAI · Anthropic · Gemini · Kimi · GLM · MiniMax · Grok — one unified API.
 
+---
+
+### Philosophy: Stream as Agent Structure
+
+> An agent is not an object. It is a **Stream**.
+
+agentix models agents as lazy, composable streams rather than stateful objects or DAG frameworks:
+
+```rust
+// token-level stream — full control, live progress
+let mut stream = agent(tools, http, request, history, None);
+while let Some(event) = stream.next().await { ... }
+
+// turn-level stream — one CompleteResponse per LLM turn
+let result = agent_turns(tools, http, request, history, None)
+    .last_content().await;
+
+// multi-agent pipeline — just Rust concurrency
+let findings = join_all(questions.iter().map(|q| {
+    agent_turns(tools.clone(), http.clone(), request.clone(), vec![q], None)
+        .last_content()
+})).await;
+```
+
+Concurrency is `join_all`. Pipelines are sequential `.await`. No orchestrator, no DAG, no magic — just streams composed with ordinary Rust.
+
+---
+
 ### vs. rig / llm-chain
 
 | | agentix | rig | llm-chain |
