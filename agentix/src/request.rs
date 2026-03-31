@@ -190,19 +190,26 @@ pub struct ToolCall {
 /// Each variant determines the request/response format, auth method, and
 /// default base URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum Provider {
+    #[serde(rename = "deepseek")]
     DeepSeek,
+    #[serde(rename = "openai")]
     OpenAI,
+    #[serde(rename = "anthropic")]
     Anthropic,
+    #[serde(rename = "gemini")]
     Gemini,
     /// Moonshot AI (Kimi)
+    #[serde(rename = "kimi")]
     Kimi,
     /// Zhipu AI (ChatGLM)
+    #[serde(rename = "glm")]
     Glm,
     /// MiniMax
+    #[serde(rename = "minimax")]
     Minimax,
     /// xAI Grok
+    #[serde(rename = "grok")]
     Grok,
 }
 
