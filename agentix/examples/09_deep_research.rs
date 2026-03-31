@@ -108,6 +108,8 @@ mod deep_research {
 
         let result = agent_complete(tools, http, request, history, Some(25_000))
             .await
+            .unwrap_or_default()
+            .content
             .unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
@@ -139,6 +141,8 @@ mod deep_research {
 
         let result = agent_complete(ToolBundle::default(), http.clone(), request, history, Some(25_000))
             .await
+            .unwrap_or_default()
+            .content
             .unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
@@ -167,6 +171,8 @@ mod deep_research {
 
         let result = agent_complete(tools, http.clone(), request, history, Some(25_000))
             .await
+            .unwrap_or_default()
+            .content
             .unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result

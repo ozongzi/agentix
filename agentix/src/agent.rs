@@ -216,28 +216,80 @@ pub fn agent(
         })
 }
 
-/// Run the full agent loop and return the final text reply.
+/// Drive the LLM ↔ tool loop using non-streaming [`Request::complete`] calls
+/// and return the final [`crate::types::CompleteResponse`].
 ///
-/// Equivalent to driving [`agent`] to completion and collecting all
-/// [`AgentEvent::Token`]s into a single `String`. Tool calls are executed
-/// transparently; only the final assistant text is returned.
+/// Mirrors the [`agent`] loop but calls `complete()` instead of `stream()` each
+/// turn. Tool calls are executed concurrently between turns, exactly as in
+/// `agent()`. The final `CompleteResponse` gives you the full assistant text,
+/// token usage, and lets you call `.json::<T>()` for structured output.
 ///
-/// Returns `Err(message)` if the agent emits an [`AgentEvent::Error`].
+/// Use [`agent`] + [`futures::StreamExt`] when you need streaming tokens or
+/// per-event progress. Use `agent_complete` when you only need the end result.
+///
+/// Returns `Err(message)` on LLM or dispatch failure.
 pub async fn agent_complete(
     tools: impl Tool + 'static,
     client: reqwest::Client,
     base_request: Request,
-    history: Vec<Message>,
+    mut history: Vec<Message>,
     history_budget: Option<usize>,
-) -> Result<String, String> {
-    let mut buf = String::new();
-    let mut stream = agent(tools, client, base_request, history, history_budget);
-    while let Some(event) = stream.next().await {
-        match event {
-            AgentEvent::Token(t) => buf.push_str(&t),
-            AgentEvent::Error(e) => return Err(e),
-            _ => {}
+) -> Result<crate::types::CompleteResponse, String> {
+    let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
+
+    loop {
+        if let Some(budget) = history_budget {
+            truncate_to_token_budget(&mut history, budget);
         }
+
+        let tool_defs = tools.raw_tools();
+        let req = base_request.clone()
+            .messages(history.clone())
+            .tools(tool_defs);
+
+        debug!(history_len = history.len(), "agent_complete: calling LLM");
+
+        let response = req.complete(&client).await
+            .map_err(|e| format!("LLM complete failed: {e}"))?;
+
+        let tool_calls = response.tool_calls.clone();
+
+        // Append assistant turn to history
+        history.push(Message::Assistant {
+            content: response.content.clone(),
+            reasoning: None,
+            tool_calls: tool_calls.clone(),
+        });
+
+        // No tool calls → done, return the response
+        if tool_calls.is_empty() {
+            return Ok(response);
+        }
+
+        // Execute tools concurrently, collect only final Result values
+        debug!(count = tool_calls.len(), "agent_complete: executing tools");
+        let futs: Vec<_> = tool_calls.iter().map(|tc| {
+            let tools = std::sync::Arc::clone(&tools);
+            let id   = tc.id.clone();
+            let name = tc.name.clone();
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
+            async move {
+                let mut output_stream = tools.call(&name, args).await;
+                let mut result_content = String::new();
+                while let Some(output) = output_stream.next().await {
+                    if let crate::tool_trait::ToolOutput::Result(v) = output {
+                        result_content = v.to_string();
+                    }
+                }
+                (id, result_content)
+            }
+        }).collect();
+
+        let results = futures::future::join_all(futs).await;
+        for (id, content) in results {
+            history.push(Message::ToolResult { call_id: id, content });
+        }
+        // Loop → next LLM turn with tool results appended
     }
-    Ok(buf)
 }
