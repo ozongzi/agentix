@@ -36,77 +36,6 @@ Concurrency is `join_all`. Pipelines are sequential `.await`. No orchestrator, n
 
 ---
 
-### vs. other frameworks
-
-| | agentix | rig | llm-chain | LangGraph |
-|---|---|---|---|---|
-| Language | Rust | Rust | Rust | Python |
-| Agentic loop | ✅ `agent()` | manual | manual | ✅ graph nodes |
-| Multi-agent pipeline | ✅ `join_all` + streams | manual | manual | ✅ graph edges |
-| Streaming tokens | ✅ | ✅ | ❌ | ✅ |
-| Streaming tool calls | ✅ | ❌ | ❌ | ❌ |
-| MCP support | ✅ | ❌ | ❌ | ✅ (partial) |
-| Proc-macro tools | ✅ `#[tool]` | ✅ `#[tool]` | ❌ | ❌ |
-| Concurrent tool execution | ✅ | ❌ | ❌ | ✅ |
-| Provider support | 8 | 10+ | 4 | 30+ |
-| Agent abstraction | Stream | Object | Chain | DAG |
-
-**vs LangGraph**: LangGraph models agents as DAGs with explicit nodes and edges. agentix models them as Streams — no graph definition, no state schema, no framework lock-in. Multi-agent pipelines are just `join_all` and sequential `.await`.
-
-**vs rig's `#[tool]`**: Both use proc-macros, but rig requires one struct per tool. agentix lets you group multiple tools in a single `impl` block and share state (e.g. a DB connection) across them:
-
-```rust
-// rig: one #[rig_tool] per function, descriptions in attribute params,
-//      return type must be Result<T, rig::tool::ToolError>
-#[rig_tool(
-    description = "Add two numbers",
-    params(a = "first number", b = "second number")
-)]
-fn add(a: i32, b: i32) -> Result<i32, rig::tool::ToolError> { Ok(a + b) }
-
-#[rig_tool(
-    description = "Multiply two numbers",
-    params(a = "first number", b = "second number")
-)]
-fn multiply(a: i32, b: i32) -> Result<i32, rig::tool::ToolError> { Ok(a * b) }
-
-// agentix: multiple tools in one impl block, descriptions from doc comments,
-//          return any type (or Result<T, String>), share state via &self
-struct MathTools { precision: u8 }
-
-#[tool]
-impl Tool for MathTools {
-    /// Add two numbers.
-    /// a: first number  b: second number
-    async fn add(&self, a: f64, b: f64) -> f64 { ... }
-
-    /// Multiply two numbers.
-    /// a: first number  b: second number
-    async fn multiply(&self, a: f64, b: f64) -> f64 { ... }
-}
-
-// standalone fn — zero boilerplate, doc comment = description
-/// Square root of x.
-/// x: input value
-#[tool]
-async fn sqrt(x: f64) -> f64 { x.sqrt() }
-
-// compose with + operator
-let bundle = sqrt + MathTools { precision: 4 };
-```
-
-## Installation
-
-```toml
-[dependencies]
-agentix = "0.9"
-
-# Optional: Model Context Protocol (MCP) tool support
-# agentix = { version = "0.9", features = ["mcp"] }
-```
-
----
-
 ## Quick Start
 
 ```rust
@@ -133,6 +62,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
     Ok(())
 }
+```
+
+---
+
+## vs. other frameworks
+
+| | agentix | rig | llm-chain | LangGraph |
+|---|---|---|---|---|
+| Language | Rust | Rust | Rust | Python |
+| Agentic loop | ✅ `agent()` | manual | manual | ✅ graph nodes |
+| Multi-agent pipeline | ✅ `join_all` + streams | manual | manual | ✅ graph edges |
+| Streaming tokens | ✅ | ✅ | ❌ | ✅ |
+| Streaming tool calls | ✅ | ❌ | ❌ | ❌ |
+| MCP support | ✅ | ❌ | ❌ | ✅ (partial) |
+| Proc-macro tools | ✅ `#[tool]` | ✅ `#[rig_tool]` | ❌ | ❌ |
+| Concurrent tool execution | ✅ | ❌ | ❌ | ✅ |
+| Provider support | 8 | 10+ | 4 | 30+ |
+| Agent abstraction | Stream | Object | Chain | DAG |
+
+**vs LangGraph**: LangGraph models agents as DAGs with explicit nodes and edges. agentix models them as Streams — no graph definition, no state schema, no framework lock-in. Multi-agent pipelines are just `join_all` and sequential `.await`.
+
+**vs rig's `#[rig_tool]`**: rig requires one annotated function per tool, with descriptions passed as attribute arguments and return type fixed to `Result<T, ToolError>`. agentix uses doc comments for descriptions, accepts any return type, and lets you group related tools in a single `impl` block with shared state:
+
+```rust
+// rig: one #[rig_tool] per function
+#[rig_tool(
+    description = "Add two numbers",
+    params(a = "first number", b = "second number")
+)]
+fn add(a: i32, b: i32) -> Result<i32, rig::tool::ToolError> { Ok(a + b) }
+
+#[rig_tool(
+    description = "Multiply two numbers",
+    params(a = "first number", b = "second number")
+)]
+fn multiply(a: i32, b: i32) -> Result<i32, rig::tool::ToolError> { Ok(a * b) }
+
+// agentix: one #[tool] for the whole impl block, descriptions from doc comments
+struct MathTools { precision: u8 }  // shared state across all methods
+
+#[tool]
+impl Tool for MathTools {
+    /// Add two numbers.
+    /// a: first number  b: second number
+    async fn add(&self, a: f64, b: f64) -> f64 { ... }
+
+    /// Multiply two numbers.
+    /// a: first number  b: second number
+    async fn multiply(&self, a: f64, b: f64) -> f64 { ... }
+}
+
+// standalone fn also works — doc comment = description
+/// Square root of x.
+/// x: input value
+#[tool]
+async fn sqrt(x: f64) -> f64 { x.sqrt() }
+
+let bundle = sqrt + MathTools { precision: 4 };  // compose with +
+```
+
+---
+
+## Installation
+
+```toml
+[dependencies]
+agentix = "0.9"
+
+# Optional: Model Context Protocol (MCP) tool support
+# agentix = { version = "0.9", features = ["mcp"] }
 ```
 
 ---
