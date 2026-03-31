@@ -21,7 +21,8 @@
 
 #[cfg(feature = "mcp")]
 mod deep_research {
-    use agentix::{McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_complete, tool};
+    use agentix::{McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_turns, tool};
+    use futures::StreamExt;
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
@@ -106,11 +107,10 @@ mod deep_research {
             "Research question: {question}\n\nSearch for this and summarize the key findings."
         ))])];
 
-        let result = agent_complete(tools, http, request, history, Some(25_000))
-            .await
-            .unwrap_or_default()
-            .content
-            .unwrap_or_default();
+        let mut s = agent_turns(tools, http, request, history, Some(25_000));
+        let mut last = None;
+        while let Some(item) = s.next().await { last = Some(item); }
+        let result = last.and_then(Result::ok).and_then(|r| r.content).unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -139,11 +139,10 @@ mod deep_research {
             "Synthesize these research findings into a coherent analysis:\n{context}"
         ))])];
 
-        let result = agent_complete(ToolBundle::default(), http.clone(), request, history, Some(25_000))
-            .await
-            .unwrap_or_default()
-            .content
-            .unwrap_or_default();
+        let mut s = agent_turns(ToolBundle::default(), http.clone(), request, history, Some(25_000));
+        let mut last = None;
+        while let Some(item) = s.next().await { last = Some(item); }
+        let result = last.and_then(Result::ok).and_then(|r| r.content).unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -169,11 +168,10 @@ mod deep_research {
             "Topic: {topic}\n\nAnalysis to turn into a report:\n{analysis}"
         ))])];
 
-        let result = agent_complete(tools, http.clone(), request, history, Some(25_000))
-            .await
-            .unwrap_or_default()
-            .content
-            .unwrap_or_default();
+        let mut s = agent_turns(tools, http.clone(), request, history, Some(25_000));
+        let mut last = None;
+        while let Some(item) = s.next().await { last = Some(item); }
+        let result = last.and_then(Result::ok).and_then(|r| r.content).unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
