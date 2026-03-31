@@ -215,3 +215,29 @@ pub fn agent(
             }
         })
 }
+
+/// Run the full agent loop and return the final text reply.
+///
+/// Equivalent to driving [`agent`] to completion and collecting all
+/// [`AgentEvent::Token`]s into a single `String`. Tool calls are executed
+/// transparently; only the final assistant text is returned.
+///
+/// Returns `Err(message)` if the agent emits an [`AgentEvent::Error`].
+pub async fn agent_complete(
+    tools: impl Tool + 'static,
+    client: reqwest::Client,
+    base_request: Request,
+    history: Vec<Message>,
+    history_budget: Option<usize>,
+) -> Result<String, String> {
+    let mut buf = String::new();
+    let mut stream = agent(tools, client, base_request, history, history_budget);
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::Token(t) => buf.push_str(&t),
+            AgentEvent::Error(e) => return Err(e),
+            _ => {}
+        }
+    }
+    Ok(buf)
+}

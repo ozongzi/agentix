@@ -21,8 +21,7 @@
 
 #[cfg(feature = "mcp")]
 mod deep_research {
-    use agentix::{AgentEvent, McpTool, Message, Request, Tool, ToolBundle, UserContent, tool};
-    use futures::StreamExt;
+    use agentix::{McpTool, Message, Request, Tool, ToolBundle, UserContent, agent_complete, tool};
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use std::sync::Arc;
@@ -50,42 +49,6 @@ mod deep_research {
     struct SubQuestions {
         /// 3-5 focused sub-questions that together cover the research topic
         questions: Vec<String>,
-    }
-
-    // ── Helper: collect all agent tokens into a String ────────────────────────────
-
-    async fn collect_agent(
-        tools: impl Tool + Send + 'static,
-        http: reqwest::Client,
-        request: Request,
-        history: Vec<Message>,
-    ) -> String {
-        let mut buf = String::new();
-        let mut stream = agentix::agent(tools, http, request, history, Some(25_000));
-        while let Some(event) = stream.next().await {
-            match event {
-                AgentEvent::Token(t) => {
-                    print!("{t}");
-                    buf.push_str(&t);
-                }
-                AgentEvent::Reasoning(t) => eprint!("\x1b[2m{t}\x1b[0m"),
-                AgentEvent::ToolCallStart(tc) => {
-                    eprintln!("\n  → {}({})", tc.name, tc.arguments);
-                }
-                AgentEvent::ToolResult { name, content, .. } => {
-                    eprintln!("  ← [{name}] {} chars", content.len());
-                }
-                AgentEvent::Done(u) => {
-                    eprintln!("\n  [tokens: {}]", u.total_tokens);
-                }
-                AgentEvent::Error(e) => {
-                    eprintln!("\n  [error] {e}");
-                    break;
-                }
-                _ => {}
-            }
-        }
-        buf
     }
 
     // ── Stage 1: QueryAgent — decompose into sub-questions ────────────────────────
@@ -143,7 +106,9 @@ mod deep_research {
             "Research question: {question}\n\nSearch for this and summarize the key findings."
         ))])];
 
-        let result = collect_agent(tools, http, request, history).await;
+        let result = agent_complete(tools, http, request, history, Some(25_000))
+            .await
+            .unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -172,7 +137,9 @@ mod deep_research {
             "Synthesize these research findings into a coherent analysis:\n{context}"
         ))])];
 
-        let result = collect_agent(ToolBundle::default(), http.clone(), request, history).await;
+        let result = agent_complete(ToolBundle::default(), http.clone(), request, history, Some(25_000))
+            .await
+            .unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -198,7 +165,9 @@ mod deep_research {
             "Topic: {topic}\n\nAnalysis to turn into a report:\n{analysis}"
         ))])];
 
-        let result = collect_agent(tools, http.clone(), request, history).await;
+        let result = agent_complete(tools, http.clone(), request, history, Some(25_000))
+            .await
+            .unwrap_or_default();
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
