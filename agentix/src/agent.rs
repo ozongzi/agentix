@@ -321,3 +321,33 @@ pub fn agent_turns(
         }
     })
 }
+
+// ── AgentTurnsExt ─────────────────────────────────────────────────────────────
+
+/// Convenience extension for `BoxStream<'_, Result<T, E>>` streams.
+///
+/// Works around the `Sized` bound on `StreamExt::last()` / `fold()` which
+/// prevents calling them directly on `Pin<Box<dyn Stream<...>>>`.
+pub trait AgentTurnsExt<T, E> {
+    /// Drain the stream and return the last successful (`Ok`) item, or `None`
+    /// if the stream was empty or every item was `Err`.
+    fn last_ok(self) -> impl std::future::Future<Output = Option<T>> + Send;
+}
+
+impl<T, E> AgentTurnsExt<T, E> for futures::stream::BoxStream<'static, Result<T, E>>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    fn last_ok(mut self) -> impl std::future::Future<Output = Option<T>> + Send {
+        async move {
+            let mut last = None;
+            while let Some(item) = self.next().await {
+                if let Ok(v) = item {
+                    last = Some(v);
+                }
+            }
+            last
+        }
+    }
+}
