@@ -2,6 +2,7 @@ use async_stream::stream;
 use futures::StreamExt;
 use tracing::{debug, warn};
 
+use crate::error::ApiError;
 use crate::msg::LlmEvent;
 use crate::request::{Message, Request, ToolCall, truncate_to_token_budget};
 use crate::tool_trait::{Tool, ToolOutput};
@@ -273,7 +274,7 @@ pub fn agent_turns(
             let response = match req.complete(&client).await {
                 Ok(r) => r,
                 Err(e) => {
-                    yield Err(format!("LLM complete failed: {e}"));
+                    yield Err(e);
                     return;
                 }
             };
@@ -329,7 +330,7 @@ pub fn agent_turns(
 /// Implements [`futures::Stream`] so you can drive it with `while let` /
 /// `StreamExt` methods when you need per-turn control, and also provides
 /// convenience methods for the common case of just wanting the final result.
-pub struct AgentTurnsStream(futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, String>>);
+pub struct AgentTurnsStream(futures::stream::BoxStream<'static, Result<crate::types::CompleteResponse, ApiError>>);
 
 impl AgentTurnsStream {
     /// Drain the stream and return the last successful turn's [`crate::types::CompleteResponse`],
@@ -354,7 +355,7 @@ impl AgentTurnsStream {
 }
 
 impl futures::Stream for AgentTurnsStream {
-    type Item = Result<crate::types::CompleteResponse, String>;
+    type Item = Result<crate::types::CompleteResponse, ApiError>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
