@@ -91,6 +91,12 @@ pub(crate) fn build_anthropic_request(
                 });
             }
             Message::Assistant { content, tool_calls, .. } => {
+                if !pending_tool_results.is_empty() {
+                    out_messages.push(RequestMessage {
+                        role: "user",
+                        content: MessageContent::Blocks(std::mem::take(&mut pending_tool_results)),
+                    });
+                }
                 if tool_calls.is_empty() {
                     out_messages.push(RequestMessage {
                         role: "assistant",

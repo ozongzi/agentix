@@ -154,14 +154,37 @@ pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
         return;
     }
 
-    // Advance keep_from past any orphaned ToolResult messages so we never
-    // start the history mid-tool-call-group.
+    // Advance keep_from past any leading ToolResult messages so we never
+    // start the history mid-tool-call-group (orphaned tool results).
     while keep_from < history.len() {
         match &history[keep_from] {
             Message::ToolResult { .. } => keep_from += 1,
             _ => break,
         }
     }
+
+    // Also skip past an Assistant-with-tool-calls whose ToolResults follow,
+    // otherwise those ToolResults would become orphaned after the drain.
+    if keep_from < history.len() {
+        if let Message::Assistant { tool_calls, .. } = &history[keep_from] {
+            if !tool_calls.is_empty() {
+                // Collect the tool_call ids that belong to this assistant turn.
+                let ids: std::collections::HashSet<&str> =
+                    tool_calls.iter().map(|tc| tc.id.as_str()).collect();
+                keep_from += 1;
+                // Skip all consecutive ToolResult messages that belong to this group.
+                while keep_from < history.len() {
+                    match &history[keep_from] {
+                        Message::ToolResult { call_id, .. } if ids.contains(call_id.as_str()) => {
+                            keep_from += 1;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+        }
+    }
+
     // Safety: always keep at least one message.
     if keep_from >= history.len() {
         keep_from = history.len().saturating_sub(1);
@@ -597,6 +620,102 @@ fn degrade_json_schema_for_deepseek(mut config: crate::config::AgentConfig) -> c
         config.response_format = Some(ResponseFormat::JsonObject);
     }
     config
+}
+
+#[cfg(test)]
+mod truncate_tests {
+    use super::*;
+
+    fn user(s: &str) -> Message {
+        Message::User(vec![crate::UserContent::Text { text: s.repeat(200) }])
+    }
+    fn assistant_text(s: &str) -> Message {
+        Message::Assistant { content: Some(s.repeat(200)), reasoning: None, tool_calls: vec![] }
+    }
+    fn assistant_tc(ids: &[&str]) -> Message {
+        Message::Assistant {
+            content: None,
+            reasoning: None,
+            tool_calls: ids.iter().map(|id| ToolCall {
+                id: id.to_string(),
+                name: "bash".to_string(),
+                arguments: "{}".to_string(),
+            }).collect(),
+        }
+    }
+    fn tool_result(id: &str) -> Message {
+        Message::ToolResult { call_id: id.to_string(), content: "ok".to_string() }
+    }
+
+    fn no_orphans(history: &[Message]) {
+        use std::collections::HashSet;
+        let called: HashSet<&str> = history.iter().filter_map(|m| {
+            if let Message::Assistant { tool_calls, .. } = m {
+                Some(tool_calls.iter().map(|tc| tc.id.as_str()))
+            } else { None }
+        }).flatten().collect();
+
+        for m in history {
+            if let Message::ToolResult { call_id, .. } = m {
+                assert!(
+                    called.contains(call_id.as_str()),
+                    "orphaned ToolResult with call_id={call_id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_no_truncation_needed() {
+        let mut h = vec![user("a"), assistant_text("b")];
+        truncate_to_token_budget(&mut h, 1_000_000);
+        assert_eq!(h.len(), 2);
+    }
+
+    #[test]
+    fn test_orphaned_tool_results_skipped_at_start() {
+        // If keep_from lands on a ToolResult, skip it.
+        let mut h = vec![
+            user("x"),
+            assistant_tc(&["id1"]),
+            tool_result("id1"),
+            user("y"),
+            assistant_text("z"),
+        ];
+        let budget = h[3..].iter().map(|m| m.estimate_tokens()).sum::<usize>() + 10;
+        truncate_to_token_budget(&mut h, budget);
+        no_orphans(&h);
+        // Should start at user("y") or later
+        assert!(h.iter().all(|m| !matches!(m, Message::ToolResult { .. })
+            || matches!(m, Message::ToolResult { .. })));
+        no_orphans(&h);
+    }
+
+    #[test]
+    fn test_assistant_with_tool_calls_not_split_from_results() {
+        // keep_from lands on assistant_tc — its ToolResults must be dropped too.
+        let mut h = vec![
+            user("old"),
+            assistant_tc(&["a1", "a2"]),
+            tool_result("a1"),
+            tool_result("a2"),
+            user("new"),
+            assistant_text("reply"),
+        ];
+        // Budget only fits the last two messages.
+        let budget = h[4..].iter().map(|m| m.estimate_tokens()).sum::<usize>() + 10;
+        truncate_to_token_budget(&mut h, budget);
+        no_orphans(&h);
+        // The assistant_tc group and its results must all be gone.
+        assert!(!h.iter().any(|m| matches!(m, Message::ToolResult { .. })));
+    }
+
+    #[test]
+    fn test_always_keeps_at_least_one_message() {
+        let mut h = vec![user("only")];
+        truncate_to_token_budget(&mut h, 1);
+        assert_eq!(h.len(), 1);
+    }
 }
 
 /// Provider-agnostic output-format hint.

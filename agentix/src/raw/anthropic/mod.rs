@@ -3,7 +3,7 @@ pub mod response;
 
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::config::AgentConfig;
 use crate::error::ApiError;
@@ -24,6 +24,7 @@ pub(crate) async fn stream_anthropic(
 ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
     let req = request::build_anthropic_request(config, messages, tools, true);
     let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+    info!(url, body = %serde_json::to_string(&req).unwrap_or_default(), "[agentix] anthropic stream request");
 
     let resp = post_streaming(http, &url, &req, token, &PostConfig {
         use_query_key:  false,
@@ -68,6 +69,7 @@ pub(crate) async fn complete_anthropic(
 ) -> Result<CompleteResponse, ApiError> {
     let req = request::build_anthropic_request(config, messages, tools, false);
     let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
+    info!(url, body = %serde_json::to_string(&req).unwrap_or_default(), "[agentix] anthropic complete request");
 
     let body = post_json(http, &url, &req, token, &PostConfig {
         use_query_key:  false,

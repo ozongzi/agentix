@@ -3,7 +3,7 @@ pub mod response;
 
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::config::AgentConfig;
 use crate::error::ApiError;
@@ -33,6 +33,7 @@ pub(crate) async fn stream_openai_compatible(
     );
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
     let token = token.to_string();
+    info!(url, body = %serde_json::to_string(&req).unwrap_or_default(), "[agentix] openai stream request");
 
     let resp = post_streaming(http, &url, &req, &token, &PostConfig {
         use_query_key:  false,
@@ -142,8 +143,10 @@ pub(crate) async fn complete_openai_compatible(
         config, history, tools, tool_choice, false,
     );
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
+    let token = token.to_string();
+    info!(url, body = %serde_json::to_string(&req).unwrap_or_default(), "[agentix] openai complete request");
 
-    let body = post_json(http, &url, &req, token, &PostConfig {
+    let body = post_json(http, &url, &req, &token, &PostConfig {
         use_query_key:  false,
         auth_header:    None,
         extra_headers:  &[],

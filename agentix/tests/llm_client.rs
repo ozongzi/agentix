@@ -183,7 +183,7 @@ mod provider_enum {
     #[test]
     fn provider_serde_roundtrip() {
         let json = serde_json::to_string(&Provider::DeepSeek).unwrap();
-        assert_eq!(json, r#""deep_seek""#);
+        assert_eq!(json, r#""deepseek""#);
         let back: Provider = serde_json::from_str(&json).unwrap();
         assert_eq!(back, Provider::DeepSeek);
     }
