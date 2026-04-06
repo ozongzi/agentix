@@ -150,7 +150,7 @@ pub(crate) fn build_anthropic_request(
 
     Request {
         model: config.model.clone(),
-        max_tokens: config.max_tokens.unwrap_or(4096),
+        max_tokens: config.max_tokens.unwrap_or(32_768),
         messages: out_messages,
         system: config.system_prompt.clone().filter(|s| !s.is_empty()),
         tools: anthropic_tools,
@@ -167,7 +167,9 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
         }
         unreachable!()
     }
-    let blocks = parts.into_iter().map(|p| match p {
+    let has_text = parts.iter().any(|p| matches!(p, UserContent::Text { .. }));
+    let has_image = parts.iter().any(|p| matches!(p, UserContent::Image(_)));
+    let mut blocks: Vec<ContentBlock> = parts.into_iter().map(|p| match p {
         UserContent::Text { text: t } => ContentBlock::Text { text: t },
         UserContent::Image(img) => ContentBlock::Image {
             source: match img.data {
@@ -176,5 +178,11 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
             },
         },
     }).collect();
+    // Some Anthropic-compatible endpoints (e.g. Minimax) ignore image blocks when
+    // there is no accompanying text block. Ensure there is always a text block
+    // in multimodal messages so vision content is reliably processed.
+    if has_image && !has_text {
+        blocks.push(ContentBlock::Text { text: String::new() });
+    }
     MessageContent::Blocks(blocks)
 }
