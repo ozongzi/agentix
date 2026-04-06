@@ -182,7 +182,7 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
     // there is no accompanying text block. Ensure there is always a text block
     // in multimodal messages so vision content is reliably processed.
     if has_image && !has_text {
-        blocks.push(ContentBlock::Text { text: String::new() });
+        blocks.push(ContentBlock::Text { text: " ".to_string() });
     }
     MessageContent::Blocks(blocks)
 }
