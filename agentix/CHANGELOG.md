@@ -2,6 +2,50 @@
 
 ---
 
+## [0.12.0] - 2026-04-11
+
+### Summary
+
+Multimodal tool results, Gemini tool-calling fixes, and a unified `Content` type across the message layer.
+
+### New features
+
+**`Content` — unified content block type**
+- New `agentix::Content` enum (`Text { text }` / `Image(ImageContent)`) replaces the former `UserContent` alias.
+- `pub type UserContent = Content` is retained for backwards compatibility.
+- `Content::text(s)` convenience constructor.
+
+**Multimodal tool results**
+- `Message::ToolResult.content` is now `Vec<Content>` instead of `String`, enabling tools to return images alongside text.
+- `AgentEvent::ToolResult.content` is now `Vec<Content>`.
+- `AgentEvent::text()` helper — returns text parts of a `ToolResult` event joined by newlines; returns `None` for other variants.
+- `ToolOutput::Result` is now `Vec<Content>` instead of `serde_json::Value`.
+
+**Richer `#[tool]` return types**
+- New `ToolResultContent` trait (highest priority in the dtolnay autoref chain) handles `Vec<Content>`, `ImageContent`, `String`, and `&str` directly without JSON serialisation.
+- `String` / `&str` returning tools now produce a plain-text `Content::Text` part instead of a quoted JSON string.
+- `T: Serialize` (catch-all) and `Result<T, E>` continue to work, serialising via `serde_json::to_string`.
+
+**`ContentWire` / `content_to_wire()` in `raw::shared`**
+- Internal helper used by all provider adapters: single-text results are sent as a plain string; multi-part or image results are sent as an array.
+
+### Bug fixes
+
+**Gemini function-calling schema**
+- `FunctionDeclaration.parameters` is now passed through `sanitize_schema_for_gemini()`, which fixes `400 INVALID_ARGUMENT` errors caused by `type: [...]` arrays and `items: true` in schemars-generated schemas.
+
+**Gemini `FunctionResponse.response` must be a JSON object**
+- Tool results are now wrapped in `{ "result": ... }` when not already an object, satisfying Gemini's proto `Struct` requirement.
+
+### Breaking changes
+
+- `Message::ToolResult { content }` — type changed from `String` to `Vec<Content>`. Construct with `vec![Content::text("...")]`.
+- `AgentEvent::ToolResult { content }` — type changed from `String` to `Vec<Content>`. Use `.text()` for the previous string behaviour.
+- `ToolOutput::Result` — inner type changed from `serde_json::Value` to `Vec<Content>`.
+- `agentix-macros` bumped to `0.5.0`.
+
+---
+
 ## [0.3.0] - 2026-03-23
 
 ### Summary

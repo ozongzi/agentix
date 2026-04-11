@@ -217,7 +217,7 @@ mod message_types {
     fn tool_result_message() {
         let m = Message::ToolResult {
             call_id: "c1".into(),
-            content: "result".into(),
+            content: vec![agentix::request::Content::text("result")],
         };
         assert!(matches!(m, Message::ToolResult { .. }));
     }
@@ -250,7 +250,7 @@ mod message_types {
             })
             .message(Message::ToolResult {
                 call_id: "call_1".into(),
-                content: "found X".into(),
+                content: vec![agentix::request::Content::text("found X")],
             });
         assert_eq!(r.messages.len(), 3);
     }

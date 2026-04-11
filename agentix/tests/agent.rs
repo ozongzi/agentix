@@ -120,12 +120,12 @@ fn agent_event_tool_result() {
     let ev = AgentEvent::ToolResult {
         id: "c1".into(),
         name: "echo".into(),
-        content: "hello".into(),
+        content: vec![agentix::request::Content::text("hello")],
     };
     if let AgentEvent::ToolResult { id, name, content } = ev {
         assert_eq!(id, "c1");
         assert_eq!(name, "echo");
-        assert_eq!(content, "hello");
+        assert_eq!(content, vec![agentix::request::Content::text("hello")]);
     } else {
         panic!("wrong variant");
     }

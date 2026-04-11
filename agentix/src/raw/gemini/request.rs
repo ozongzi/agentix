@@ -159,9 +159,14 @@ pub(crate) fn build_gemini_request(
                 }
             }
             Message::ToolResult { call_id, content } => {
+                use crate::raw::shared::{content_to_wire, ContentWire};
+                let response = match content_to_wire(content) {
+                    ContentWire::Text(t) => serde_json::json!({ "result": t }),
+                    ContentWire::Parts(parts) => serde_json::json!({ "parts": parts }),
+                };
                 pending_fn_responses.push(Part::FunctionResponse(FunctionResponse {
                     name: call_id.clone(),
-                    response: Value::String(content.clone()),
+                    response,
                 }));
             }
         }
@@ -177,7 +182,7 @@ pub(crate) fn build_gemini_request(
             function_declarations: tools.iter().map(|t| FunctionDeclaration {
                 name: t.function.name.clone(),
                 description: t.function.description.clone(),
-                parameters: t.function.parameters.clone(),
+                parameters: sanitize_schema_for_gemini(t.function.parameters.clone()),
             }).collect(),
         }])
     };
@@ -214,4 +219,40 @@ pub(crate) fn build_gemini_request(
     };
 
     Request { contents, system_instruction, tools: gemini_tools, tool_config, generation_config }
+}
+
+fn sanitize_schema_for_gemini(v: Value) -> Value {
+    match v {
+        Value::Object(mut map) => {
+            // type: ["string", "null"] -> 取第一个非 null 值
+            if let Some(Value::Array(types)) = map.get("type") {
+                let first_non_null = types.iter()
+                    .find(|t| t.as_str() != Some("null"))
+                    .cloned()
+                    .unwrap_or(Value::String("string".into()));
+                map.insert("type".into(), first_non_null);
+            }
+            // items: true -> items: {}
+            if map.get("items").map(|v| v.is_boolean()).unwrap_or(false) {
+                map.insert("items".into(), Value::Object(serde_json::Map::new()));
+            }
+            // 递归处理 properties
+            if let Some(Value::Object(props)) = map.remove("properties") {
+                let new_props: serde_json::Map<String, Value> = props.into_iter()
+                    .map(|(k, v)| (k, sanitize_schema_for_gemini(v)))
+                    .collect();
+                map.insert("properties".into(), Value::Object(new_props));
+            }
+            // 递归处理 items（object 情况）
+            if let Some(items) = map.remove("items") {
+                map.insert("items".into(), sanitize_schema_for_gemini(items));
+            }
+            // Gemini 不支持这些标准 JSON Schema 字段
+            map.remove("$defs");
+            map.remove("$schema");
+            map.remove("additionalProperties");
+            Value::Object(map)
+        }
+        other => other,
+    }
 }

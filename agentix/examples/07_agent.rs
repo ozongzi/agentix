@@ -76,8 +76,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolProgress { name, progress, .. } => {
                 println!("  [{name}] {progress}");
             }
-            AgentEvent::ToolResult { name, content, .. } => {
-                println!("← [{name}] = {content}");
+            AgentEvent::ToolResult { name, ref content, .. } => {
+                let text = content.iter()
+                    .filter_map(|p| if let agentix::Content::Text { text } = p { Some(text.as_str()) } else { None })
+                    .collect::<Vec<_>>().join(" ");
+                println!("← [{name}] = {text}");
             }
             AgentEvent::Usage(u) => {
                 eprintln!("\n[tokens: {}]", u.total_tokens);

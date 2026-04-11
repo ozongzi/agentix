@@ -54,7 +54,7 @@ pub use error::ApiError;
 pub use msg::LlmEvent;
 pub use raw::shared::ToolDefinition;
 pub use request::{
-    ImageContent, ImageData, Message, Provider, Request, ResponseFormat,
+    Content, ImageContent, ImageData, Message, Provider, Request, ResponseFormat,
     ToolCall, ToolChoice, UserContent, truncate_to_token_budget,
 };
 pub use types::{CompleteResponse, UsageStats};

@@ -118,9 +118,15 @@ pub(crate) fn build_anthropic_request(
                 }
             }
             Message::ToolResult { call_id, content } => {
+                use crate::raw::shared::{content_to_wire, ContentWire};
+                let wire_content = match content_to_wire(content) {
+                    ContentWire::Text(t) => t.to_string(),
+                    ContentWire::Parts(parts) => serde_json::to_string(parts)
+                        .unwrap_or_default(),
+                };
                 pending_tool_results.push(ContentBlock::ToolResult {
                     tool_use_id: call_id.clone(),
-                    content: content.clone(),
+                    content: wire_content,
                 });
             }
         }

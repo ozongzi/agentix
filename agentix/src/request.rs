@@ -35,7 +35,7 @@ use crate::types::CompleteResponse;
 // ─── Message ────────────────────────────────────────────────────────────────
 
 /// Image content that can be embedded in a user message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImageContent {
     /// The image payload.
     pub data: ImageData,
@@ -44,7 +44,7 @@ pub struct ImageContent {
 }
 
 /// How the image data is provided.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageData {
     /// Base64-encoded image bytes.
@@ -53,24 +53,35 @@ pub enum ImageData {
     Url(String),
 }
 
-/// A single content block inside a `Message::User`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A single content block — used in user messages, tool results, and tool outputs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum UserContent {
+pub enum Content {
     Text { text: String },
     Image(ImageContent),
 }
 
-impl From<&str> for UserContent {
+impl Content {
+    pub fn text(s: impl Into<String>) -> Self {
+        Content::Text { text: s.into() }
+    }
+}
+
+impl From<&str> for Content {
     fn from(s: &str) -> Self {
-        UserContent::Text { text: s.to_string() }
+        Content::Text {
+            text: s.to_string(),
+        }
     }
 }
-impl From<String> for UserContent {
+impl From<String> for Content {
     fn from(s: String) -> Self {
-        UserContent::Text { text: s }
+        Content::Text { text: s }
     }
 }
+
+/// Backwards-compatible type alias.
+pub type UserContent = Content;
 
 /// A single turn in a conversation. Every variant carries exactly the fields
 /// it needs — no invalid states are representable.
@@ -89,7 +100,10 @@ pub enum Message {
     },
 
     /// The result of a tool invocation, keyed by the call's ID.
-    ToolResult { call_id: String, content: String },
+    ToolResult {
+        call_id: String,
+        content: Vec<Content>,
+    },
 }
 
 impl Message {
@@ -108,15 +122,25 @@ impl Message {
                 tokens += 4; // overhead for role
                 for part in parts {
                     match part {
-                        UserContent::Text { text: t } => tokens += bpe.encode_with_special_tokens(t).len(),
+                        UserContent::Text { text: t } => {
+                            tokens += bpe.encode_with_special_tokens(t).len()
+                        }
                         UserContent::Image(_) => tokens += 1000, // rough fixed cost for images
                     }
                 }
             }
-            Message::Assistant { content, reasoning, tool_calls } => {
+            Message::Assistant {
+                content,
+                reasoning,
+                tool_calls,
+            } => {
                 tokens += 4;
-                if let Some(c) = content { tokens += bpe.encode_with_special_tokens(c).len(); }
-                if let Some(r) = reasoning { tokens += bpe.encode_with_special_tokens(r).len(); }
+                if let Some(c) = content {
+                    tokens += bpe.encode_with_special_tokens(c).len();
+                }
+                if let Some(r) = reasoning {
+                    tokens += bpe.encode_with_special_tokens(r).len();
+                }
                 for tc in tool_calls {
                     tokens += bpe.encode_with_special_tokens(&tc.name).len();
                     tokens += bpe.encode_with_special_tokens(&tc.arguments).len();
@@ -124,7 +148,14 @@ impl Message {
             }
             Message::ToolResult { content, .. } => {
                 tokens += 4;
-                tokens += bpe.encode_with_special_tokens(content).len();
+                for part in content {
+                    match part {
+                        Content::Text { text } => {
+                            tokens += bpe.encode_with_special_tokens(text).len()
+                        }
+                        Content::Image(_) => tokens += 1000,
+                    }
+                }
             }
         }
         tokens
@@ -240,28 +271,28 @@ impl Provider {
     /// Default base URL for this provider.
     pub fn default_base_url(&self) -> &'static str {
         match self {
-            Provider::DeepSeek  => "https://api.deepseek.com",
-            Provider::OpenAI    => "https://api.openai.com/v1",
+            Provider::DeepSeek => "https://api.deepseek.com",
+            Provider::OpenAI => "https://api.openai.com/v1",
             Provider::Anthropic => "https://api.anthropic.com",
-            Provider::Gemini    => "https://generativelanguage.googleapis.com/v1beta",
-            Provider::Kimi      => "https://api.moonshot.cn/v1",
-            Provider::Glm       => "https://open.bigmodel.cn/api/paas/v4",
-            Provider::Minimax   => "https://api.minimaxi.com/anthropic",
-            Provider::Grok      => "https://api.x.ai/v1",
+            Provider::Gemini => "https://generativelanguage.googleapis.com/v1beta",
+            Provider::Kimi => "https://api.moonshot.cn/v1",
+            Provider::Glm => "https://open.bigmodel.cn/api/paas/v4",
+            Provider::Minimax => "https://api.minimaxi.com/anthropic",
+            Provider::Grok => "https://api.x.ai/v1",
         }
     }
 
     /// Default model for this provider.
     pub fn default_model(&self) -> &'static str {
         match self {
-            Provider::DeepSeek  => "deepseek-chat",
-            Provider::OpenAI    => "gpt-4o",
+            Provider::DeepSeek => "deepseek-chat",
+            Provider::OpenAI => "gpt-4o",
             Provider::Anthropic => "claude-sonnet-4-20250514",
-            Provider::Gemini    => "gemini-2.0-flash",
-            Provider::Kimi      => "kimi-k2.5",
-            Provider::Glm       => "glm-5",
-            Provider::Minimax   => "MiniMax-M2.7",
-            Provider::Grok      => "grok-4",
+            Provider::Gemini => "gemini-2.0-flash",
+            Provider::Kimi => "kimi-k2.5",
+            Provider::Glm => "glm-5",
+            Provider::Minimax => "MiniMax-M2.7",
+            Provider::Grok => "grok-4",
         }
     }
 }
@@ -295,7 +326,6 @@ pub enum ToolChoice {
 #[derive(Debug, Clone)]
 pub struct Request {
     // ── Identity ──────────────────────────────────────────────────────────
-
     /// Which provider to use.
     pub provider: Provider,
     /// API key / token.
@@ -304,7 +334,6 @@ pub struct Request {
     pub base_url: String,
 
     // ── Model & messages ─────────────────────────────────────────────────
-
     /// Model identifier (e.g. `"deepseek-chat"`, `"gpt-4o"`).
     pub model: String,
     /// Optional system prompt.
@@ -313,14 +342,12 @@ pub struct Request {
     pub messages: Vec<Message>,
 
     // ── Tools ────────────────────────────────────────────────────────────
-
     /// Tools the model may call.
     pub tools: Vec<ToolDefinition>,
     /// How the model should select tools.
     pub tool_choice: Option<ToolChoice>,
 
     // ── Tuning ───────────────────────────────────────────────────────────
-
     /// Sampling temperature.
     pub temperature: Option<f32>,
     /// Maximum tokens to generate.
@@ -332,7 +359,6 @@ pub struct Request {
     pub extra_body: serde_json::Map<String, serde_json::Value>,
 
     // ── Retry ────────────────────────────────────────────────────────────
-
     /// Maximum retries for transient errors. Default: 3.
     pub max_retries: u32,
     /// Initial retry delay in milliseconds. Default: 1000.
@@ -364,28 +390,44 @@ impl Request {
     }
 
     /// Shortcut for `Request::new(Provider::DeepSeek, api_key)`.
-    pub fn deepseek(api_key: impl Into<String>) -> Self { Self::new(Provider::DeepSeek, api_key) }
+    pub fn deepseek(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::DeepSeek, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::OpenAI, api_key)`.
-    pub fn openai(api_key: impl Into<String>) -> Self { Self::new(Provider::OpenAI, api_key) }
+    pub fn openai(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::OpenAI, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::Anthropic, api_key)`.
-    pub fn anthropic(api_key: impl Into<String>) -> Self { Self::new(Provider::Anthropic, api_key) }
+    pub fn anthropic(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::Anthropic, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::Gemini, api_key)`.
-    pub fn gemini(api_key: impl Into<String>) -> Self { Self::new(Provider::Gemini, api_key) }
+    pub fn gemini(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::Gemini, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::Kimi, api_key)`.
-    pub fn kimi(api_key: impl Into<String>) -> Self { Self::new(Provider::Kimi, api_key) }
+    pub fn kimi(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::Kimi, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::Glm, api_key)`.
-    pub fn glm(api_key: impl Into<String>) -> Self { Self::new(Provider::Glm, api_key) }
+    pub fn glm(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::Glm, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::Minimax, api_key)`.
-    pub fn minimax(api_key: impl Into<String>) -> Self { Self::new(Provider::Minimax, api_key) }
+    pub fn minimax(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::Minimax, api_key)
+    }
 
     /// Shortcut for `Request::new(Provider::Grok, api_key)`.
-    pub fn grok(api_key: impl Into<String>) -> Self { Self::new(Provider::Grok, api_key) }
+    pub fn grok(api_key: impl Into<String>) -> Self {
+        Self::new(Provider::Grok, api_key)
+    }
 
     // ── Builder setters (all consume & return Self) ──────────────────────
 
@@ -415,7 +457,7 @@ impl Request {
 
     /// Append a user text message (convenience).
     pub fn user(self, text: impl Into<String>) -> Self {
-        self.message(Message::User(vec![UserContent::Text { text: text.into() }]))
+        self.message(Message::User(vec![Content::text(text)]))
     }
 
     /// Set the full message history.
@@ -455,8 +497,17 @@ impl Request {
     /// let schema = serde_json::to_value(schemars::schema_for!(MyStruct)).unwrap();
     /// let req = Request::openai(key).json_schema("my_struct", schema, true);
     /// ```
-    pub fn json_schema(mut self, name: impl Into<String>, schema: serde_json::Value, strict: bool) -> Self {
-        self.response_format = Some(ResponseFormat::JsonSchema { name: name.into(), schema, strict });
+    pub fn json_schema(
+        mut self,
+        name: impl Into<String>,
+        schema: serde_json::Value,
+        strict: bool,
+    ) -> Self {
+        self.response_format = Some(ResponseFormat::JsonSchema {
+            name: name.into(),
+            schema,
+            strict,
+        });
         self
     }
 
@@ -507,89 +558,108 @@ impl Request {
 
         match self.provider {
             Provider::DeepSeek => {
-                use crate::raw::openai::stream_openai_compatible;
                 use crate::raw::deepseek::prepare_history;
+                use crate::raw::openai::stream_openai_compatible;
                 let config = degrade_json_schema_for_deepseek(config);
                 stream_openai_compatible(
-                    &self.api_key, http, &config, messages, tools,
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
                     Some(prepare_history),
-                ).await
+                )
+                .await
             }
             Provider::OpenAI => {
                 use crate::raw::openai::stream_openai_compatible;
-                stream_openai_compatible(
-                    &self.api_key, http, &config, messages, tools, None,
-                ).await
+                stream_openai_compatible(&self.api_key, http, &config, messages, tools, None).await
             }
             Provider::Anthropic => {
                 crate::raw::anthropic::stream_anthropic(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
             }
             Provider::Gemini => {
-                crate::raw::gemini::stream_gemini(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                crate::raw::gemini::stream_gemini(&self.api_key, http, &config, messages, tools)
+                    .await
             }
             Provider::Minimax => {
                 crate::raw::anthropic::stream_anthropic(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
             }
             Provider::Kimi | Provider::Glm | Provider::Grok => {
                 use crate::raw::openai::stream_openai_compatible;
-                stream_openai_compatible(
-                    &self.api_key, http, &config, messages, tools, None,
-                ).await
+                stream_openai_compatible(&self.api_key, http, &config, messages, tools, None).await
             }
         }
     }
 
     /// Send a non-streaming request and return the complete response.
-    pub async fn complete(
-        &self,
-        http: &reqwest::Client,
-    ) -> Result<CompleteResponse, ApiError> {
+    pub async fn complete(&self, http: &reqwest::Client) -> Result<CompleteResponse, ApiError> {
         let config = self.to_agent_config();
         let messages = &self.messages;
         let tools = &self.tools;
 
         match self.provider {
             Provider::DeepSeek => {
-                use crate::raw::openai::complete_openai_compatible;
                 use crate::raw::deepseek::prepare_history;
+                use crate::raw::openai::complete_openai_compatible;
                 let config = degrade_json_schema_for_deepseek(config);
                 complete_openai_compatible(
-                    &self.api_key, http, &config, messages, tools,
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
                     Some(prepare_history),
-                ).await
+                )
+                .await
             }
             Provider::OpenAI => {
                 use crate::raw::openai::complete_openai_compatible;
-                complete_openai_compatible(
-                    &self.api_key, http, &config, messages, tools, None,
-                ).await
+                complete_openai_compatible(&self.api_key, http, &config, messages, tools, None)
+                    .await
             }
             Provider::Anthropic => {
                 crate::raw::anthropic::complete_anthropic(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
             }
             Provider::Gemini => {
-                crate::raw::gemini::complete_gemini(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                crate::raw::gemini::complete_gemini(&self.api_key, http, &config, messages, tools)
+                    .await
             }
             Provider::Minimax => {
                 crate::raw::anthropic::complete_anthropic(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
             }
             Provider::Kimi | Provider::Glm | Provider::Grok => {
                 use crate::raw::openai::complete_openai_compatible;
-                complete_openai_compatible(
-                    &self.api_key, http, &config, messages, tools, None,
-                ).await
+                complete_openai_compatible(&self.api_key, http, &config, messages, tools, None)
+                    .await
             }
         }
     }
@@ -614,8 +684,13 @@ impl Request {
 
 /// DeepSeek supports `json_object` but not `json_schema`.
 /// Silently degrade so callers don't have to branch on provider.
-fn degrade_json_schema_for_deepseek(mut config: crate::config::AgentConfig) -> crate::config::AgentConfig {
-    if matches!(config.response_format, Some(ResponseFormat::JsonSchema { .. })) {
+fn degrade_json_schema_for_deepseek(
+    mut config: crate::config::AgentConfig,
+) -> crate::config::AgentConfig {
+    if matches!(
+        config.response_format,
+        Some(ResponseFormat::JsonSchema { .. })
+    ) {
         tracing::warn!("DeepSeek does not support json_schema; degrading to json_object");
         config.response_format = Some(ResponseFormat::JsonObject);
     }
@@ -627,33 +702,51 @@ mod truncate_tests {
     use super::*;
 
     fn user(s: &str) -> Message {
-        Message::User(vec![crate::UserContent::Text { text: s.repeat(200) }])
+        Message::User(vec![crate::UserContent::Text {
+            text: s.repeat(200),
+        }])
     }
     fn assistant_text(s: &str) -> Message {
-        Message::Assistant { content: Some(s.repeat(200)), reasoning: None, tool_calls: vec![] }
+        Message::Assistant {
+            content: Some(s.repeat(200)),
+            reasoning: None,
+            tool_calls: vec![],
+        }
     }
     fn assistant_tc(ids: &[&str]) -> Message {
         Message::Assistant {
             content: None,
             reasoning: None,
-            tool_calls: ids.iter().map(|id| ToolCall {
-                id: id.to_string(),
-                name: "bash".to_string(),
-                arguments: "{}".to_string(),
-            }).collect(),
+            tool_calls: ids
+                .iter()
+                .map(|id| ToolCall {
+                    id: id.to_string(),
+                    name: "bash".to_string(),
+                    arguments: "{}".to_string(),
+                })
+                .collect(),
         }
     }
     fn tool_result(id: &str) -> Message {
-        Message::ToolResult { call_id: id.to_string(), content: "ok".to_string() }
+        Message::ToolResult {
+            call_id: id.to_string(),
+            content: vec![Content::text("ok")],
+        }
     }
 
     fn no_orphans(history: &[Message]) {
         use std::collections::HashSet;
-        let called: HashSet<&str> = history.iter().filter_map(|m| {
-            if let Message::Assistant { tool_calls, .. } = m {
-                Some(tool_calls.iter().map(|tc| tc.id.as_str()))
-            } else { None }
-        }).flatten().collect();
+        let called: HashSet<&str> = history
+            .iter()
+            .filter_map(|m| {
+                if let Message::Assistant { tool_calls, .. } = m {
+                    Some(tool_calls.iter().map(|tc| tc.id.as_str()))
+                } else {
+                    None
+                }
+            })
+            .flatten()
+            .collect();
 
         for m in history {
             if let Message::ToolResult { call_id, .. } = m {
@@ -686,8 +779,10 @@ mod truncate_tests {
         truncate_to_token_budget(&mut h, budget);
         no_orphans(&h);
         // Should start at user("y") or later
-        assert!(h.iter().all(|m| !matches!(m, Message::ToolResult { .. })
-            || matches!(m, Message::ToolResult { .. })));
+        assert!(
+            h.iter().all(|m| !matches!(m, Message::ToolResult { .. })
+                || matches!(m, Message::ToolResult { .. }))
+        );
         no_orphans(&h);
     }
 

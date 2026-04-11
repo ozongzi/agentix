@@ -125,7 +125,7 @@ struct ParamInfo {
 ///             for i in 1..=n {
 ///                 yield agentix::ToolOutput::Progress(format!("{i}/{n}"));
 ///             }
-///             yield agentix::ToolOutput::Result(agentix::serde_json::json!({ "final": n }));
+///             yield agentix::ToolOutput::Result(vec![agentix::request::Content::text(format!("{{ \"final\": {n} }}" ))]);
 ///         }
 ///     }
 /// }
@@ -205,9 +205,9 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
                 match name {
                     #call_arm
                     _ => {
-                        let err = agentix::serde_json::json!({"error": format!("unknown tool: {}", name)});
+                        let err = format!("{{\"error\":\"unknown tool: {}\"}}", name);
                         use agentix::futures::StreamExt;
-                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed()
+                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(vec![agentix::request::Content::text(err)])]).boxed()
                     }
                 }
             }
@@ -294,9 +294,9 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 match name {
                     #(#call_arms)*
                     _ => {
-                        let err = agentix::serde_json::json!({"error": format!("unknown tool: {}", name)});
+                        let err = format!("{{\"error\":\"unknown tool: {}\"}}", name);
                         use agentix::futures::StreamExt;
-                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed()
+                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(vec![agentix::request::Content::text(err)])]).boxed()
                     }
                 }
             }
@@ -379,11 +379,9 @@ fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
             ) {
                 Ok(v) => v,
                 Err(e) => {
-                    let err = agentix::serde_json::json!({
-                        "error": format!("invalid argument '{}': {}", #pname_str, e)
-                    });
+                    let err = format!("{{\"error\":\"invalid argument '{}': {}\"}}", #pname_str, e);
                     use agentix::futures::StreamExt;
-                    return agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(err)]).boxed();
+                    return agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(vec![agentix::request::Content::text(err)])]).boxed();
                 }
             };
         }
@@ -412,7 +410,7 @@ fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
                 let __result = (async move || #output { #body })().await;
 
                 #[allow(unused_imports)]
-                use agentix::tool_trait::{ToolResultResult, ToolResultValue};
+                use agentix::tool_trait::{ToolResultContent, ToolResultResult, ToolResultValue};
 
                 let __val = (__result).__agentix_wrap();
                 agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(__val)]).boxed()

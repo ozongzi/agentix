@@ -1,16 +1,17 @@
 use crate::raw::shared::ToolDefinition as RawTool;
+use crate::request::{Content, ImageContent};
 use async_trait::async_trait;
+use futures::stream::BoxStream;
 use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
-use futures::stream::BoxStream;
 
 /// Output emitted by a tool during its execution.
 pub enum ToolOutput {
     /// Intermediate progress (e.g. streaming stdout, reporting percentage).
     Progress(String),
     /// The final result of the tool execution.
-    Result(Value),
+    Result(Vec<Content>),
 }
 
 /// The core trait that all agent tools must implement.
@@ -88,13 +89,15 @@ impl ToolBundle {
 
     /// Remove all tools whose `raw_tools()` contains any of the given names.
     pub fn remove_by_names(&mut self, names: &[String]) {
-        let names_set: std::collections::HashSet<&str> =
-            names.iter().map(String::as_str).collect();
+        let names_set: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
         let mut new_tools: Vec<Box<dyn Tool>> = Vec::new();
         let mut new_index: HashMap<String, usize> = HashMap::new();
         for tool in self.tools.drain(..) {
             let raws = tool.raw_tools();
-            if raws.iter().any(|r| names_set.contains(r.function.name.as_str())) {
+            if raws
+                .iter()
+                .any(|r| names_set.contains(r.function.name.as_str()))
+            {
                 continue;
             }
             let idx = new_tools.len();
@@ -141,11 +144,16 @@ impl Tool for ToolBundle {
             }
             let dups: Vec<_> = counts.into_iter().filter(|(_, c)| *c > 1).collect();
             if !dups.is_empty() {
-                eprintln!("[agentix] WARN duplicate tool names in ToolBundle: {:?}", dups);
+                eprintln!(
+                    "[agentix] WARN duplicate tool names in ToolBundle: {:?}",
+                    dups
+                );
             }
         }
         let mut seen = std::collections::HashSet::new();
-        all.into_iter().filter(|r| seen.insert(r.function.name.clone())).collect()
+        all.into_iter()
+            .filter(|r| seen.insert(r.function.name.clone()))
+            .collect()
     }
 
     async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput> {
@@ -161,8 +169,11 @@ impl Tool for ToolBundle {
                 return tool.call(name, args).await;
             }
         }
-        let err = json!({ "error": format!("unknown tool: {name}") });
-        futures::stream::iter(vec![ToolOutput::Result(err)]).boxed()
+
+        futures::stream::iter(vec![ToolOutput::Result(vec![Content::text(format!(
+            "error: unknown tool: {name}"
+        ))])])
+        .boxed()
     }
 }
 
@@ -189,7 +200,11 @@ impl<T: Tool + 'static> std::ops::AddAssign<T> for ToolBundle {
 impl<T: Tool + 'static> std::ops::Sub<T> for ToolBundle {
     type Output = ToolBundle;
     fn sub(mut self, rhs: T) -> Self::Output {
-        let names: Vec<String> = rhs.raw_tools().into_iter().map(|r| r.function.name).collect();
+        let names: Vec<String> = rhs
+            .raw_tools()
+            .into_iter()
+            .map(|r| r.function.name)
+            .collect();
         self.remove_by_names(&names);
         self
     }
@@ -197,38 +212,84 @@ impl<T: Tool + 'static> std::ops::Sub<T> for ToolBundle {
 
 impl<T: Tool + 'static> std::ops::SubAssign<T> for ToolBundle {
     fn sub_assign(&mut self, rhs: T) {
-        let names: Vec<String> = rhs.raw_tools().into_iter().map(|r| r.function.name).collect();
+        let names: Vec<String> = rhs
+            .raw_tools()
+            .into_iter()
+            .map(|r| r.function.name)
+            .collect();
         self.remove_by_names(&names);
     }
 }
 
 // ── dtolnay trick (autoref specialization) ──────────────────────────────────
+//
+// Priority (most specific wins):
+//   1. ToolResultContent — Vec<Content>, ImageContent, String  (direct content types)
+//   2. ToolResultResult  — Result<T, E>                        (fallible, via autoref)
+//   3. ToolResultValue   — T: Serialize                        (catch-all, via &&autoref)
+
+#[doc(hidden)]
+pub trait ToolResultContent {
+    fn __agentix_wrap(self) -> Vec<Content>;
+}
+
+/// `Vec<Content>` — pass through directly.
+impl ToolResultContent for Vec<Content> {
+    fn __agentix_wrap(self) -> Vec<Content> {
+        self
+    }
+}
+
+/// `ImageContent` — wrap in a single-element vec.
+impl ToolResultContent for ImageContent {
+    fn __agentix_wrap(self) -> Vec<Content> {
+        vec![Content::Image(self)]
+    }
+}
+
+/// `String` — wrap as text.
+impl ToolResultContent for String {
+    fn __agentix_wrap(self) -> Vec<Content> {
+        vec![Content::text(self)]
+    }
+}
+
+/// `&str` — wrap as text.
+impl ToolResultContent for &str {
+    fn __agentix_wrap(self) -> Vec<Content> {
+        vec![Content::text(self)]
+    }
+}
 
 #[doc(hidden)]
 pub trait ToolResultResult {
-    fn __agentix_wrap(self) -> Value;
+    fn __agentix_wrap(self) -> Vec<Content>;
 }
 
 impl<T: serde::Serialize, E: std::fmt::Display> ToolResultResult for Result<T, E> {
-    fn __agentix_wrap(self) -> Value {
+    fn __agentix_wrap(self) -> Vec<Content> {
         match self {
-            Ok(v) => serde_json::to_value(v).unwrap_or_else(|e| {
-                json!({ "error": format!("serialization error: {e}") })
-            }),
-            Err(e) => json!({ "error": e.to_string() }),
+            Ok(v) => {
+                let text = serde_json::to_string(&v).unwrap_or_else(|e| {
+                    json!({ "error": format!("serialization error: {e}") }).to_string()
+                });
+                vec![Content::text(text)]
+            }
+            Err(e) => vec![Content::text(json!({ "error": e.to_string() }).to_string())],
         }
     }
 }
 
 #[doc(hidden)]
 pub trait ToolResultValue {
-    fn __agentix_wrap(self) -> Value;
+    fn __agentix_wrap(self) -> Vec<Content>;
 }
 
 impl<T: serde::Serialize> ToolResultValue for &T {
-    fn __agentix_wrap(self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|e| {
-            json!({ "error": format!("serialization error: {e}") })
-        })
+    fn __agentix_wrap(self) -> Vec<Content> {
+        let text = serde_json::to_string(self).unwrap_or_else(|e| {
+            json!({ "error": format!("serialization error: {e}") }).to_string()
+        });
+        vec![Content::text(text)]
     }
 }

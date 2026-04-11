@@ -129,9 +129,10 @@ impl Tool for AnyhowResultTool {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-async fn call(tool: &impl Tool, name: &str, args: Value) -> Value {
+/// Run a tool and return the last Result as a Vec<Content>.
+async fn call(tool: &impl Tool, name: &str, args: Value) -> Vec<agentix::Content> {
     let mut stream = tool.call(name, args).await;
-    let mut last_res = Value::Null;
+    let mut last_res = vec![];
     while let Some(ev) = stream.next().await {
         if let ToolOutput::Result(v) = ev {
             last_res = v;
@@ -140,35 +141,50 @@ async fn call(tool: &impl Tool, name: &str, args: Value) -> Value {
     last_res
 }
 
+/// Extract the text from a single-text-part result, or panic.
+fn text(parts: Vec<agentix::Content>) -> String {
+    match parts.as_slice() {
+        [agentix::Content::Text { text }] => text.clone(),
+        other => panic!("expected single Text part, got: {other:?}"),
+    }
+}
+
+/// Parse the text content as JSON Value.
+fn json_val(parts: Vec<agentix::Content>) -> Value {
+    let t = text(parts);
+    serde_json::from_str(&t).unwrap_or_else(|_| Value::String(t))
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn value_tool_returns_json_object() {
-    let result = call(&ValueTool, "run", json!({ "input": "world" })).await;
+    let result = json_val(call(&ValueTool, "run", json!({ "input": "world" })).await);
     assert_eq!(result, json!({ "echo": "world" }));
 }
 
 #[tokio::test]
 async fn string_tool_returns_json_string() {
-    let result = call(&StringTool, "run", json!({ "input": "Alice" })).await;
-    assert_eq!(result, Value::String("hello, Alice".to_string()));
+    // String return wraps as text content directly
+    let t = text(call(&StringTool, "run", json!({ "input": "Alice" })).await);
+    assert_eq!(t, "hello, Alice");
 }
 
 #[tokio::test]
 async fn int_tool_returns_json_number() {
-    let result = call(&IntTool, "run", json!({ "x": 3, "y": 4 })).await;
+    let result = json_val(call(&IntTool, "run", json!({ "x": 3, "y": 4 })).await);
     assert_eq!(result, json!(7_i64));
 }
 
 #[tokio::test]
 async fn bool_tool_returns_json_bool() {
-    let result = call(&BoolTool, "run", json!({ "value": true })).await;
+    let result = json_val(call(&BoolTool, "run", json!({ "value": true })).await);
     assert_eq!(result, json!(false));
 }
 
 #[tokio::test]
 async fn struct_tool_serializes_fields() {
-    let result = call(&WeatherTool, "report", json!({ "city": "Tokyo" })).await;
+    let result = json_val(call(&WeatherTool, "report", json!({ "city": "Tokyo" })).await);
     assert_eq!(result["city"], json!("Tokyo"));
     assert_eq!(result["temp_c"], json!(22.5_f64));
     assert_eq!(result["sunny"], json!(true));
@@ -176,60 +192,55 @@ async fn struct_tool_serializes_fields() {
 
 #[tokio::test]
 async fn maybe_tool_some_returns_string() {
-    let result = call(&MaybeTool, "run", json!({ "present": true })).await;
+    let result = json_val(call(&MaybeTool, "run", json!({ "present": true })).await);
     assert_eq!(result, json!("yes"));
 }
 
 #[tokio::test]
 async fn maybe_tool_none_returns_null() {
-    let result = call(&MaybeTool, "run", json!({ "present": false })).await;
+    let result = json_val(call(&MaybeTool, "run", json!({ "present": false })).await);
     assert_eq!(result, Value::Null);
 }
 
 #[tokio::test]
 async fn list_tool_returns_json_array() {
-    let result = call(&ListTool, "run", json!({ "n": 4 })).await;
+    let result = json_val(call(&ListTool, "run", json!({ "n": 4 })).await);
     assert_eq!(result, json!([0, 1, 2, 3]));
 }
 
 #[tokio::test]
 async fn unknown_tool_name_returns_error_json() {
-    let result = call(&ValueTool, "nonexistent", json!({})).await;
-    assert!(result["error"].as_str().unwrap().contains("unknown tool"));
+    let t = text(call(&ValueTool, "nonexistent", json!({})).await);
+    assert!(t.contains("unknown tool"));
 }
 
 #[tokio::test]
 async fn bad_argument_type_returns_error_json() {
     // Pass a string where an integer is expected.
-    let result = call(&IntTool, "run", json!({ "x": "not_a_number", "y": 1 })).await;
-    assert!(
-        result["error"]
-            .as_str()
-            .unwrap()
-            .contains("invalid argument")
-    );
+    let t = text(call(&IntTool, "run", json!({ "x": "not_a_number", "y": 1 })).await);
+    assert!(t.contains("invalid argument"));
 }
 
 #[tokio::test]
 async fn result_tool_ok_returns_string() {
-    let result = call(&ResultTool, "run", json!({ "success": true })).await;
-    assert_eq!(result, json!("success"));
+    let t = text(call(&ResultTool, "run", json!({ "success": true })).await);
+    assert_eq!(t, "\"success\"");
 }
 
 #[tokio::test]
 async fn result_tool_err_returns_error_object() {
-    let result = call(&ResultTool, "run", json!({ "success": false })).await;
-    assert_eq!(result, json!({ "error": "failed" }));
+    let t = text(call(&ResultTool, "run", json!({ "success": false })).await);
+    assert!(t.contains("failed"));
 }
 
 #[tokio::test]
 async fn result_tool_with_typed_error_returns_stringified_error() {
-    let result = call(&AnyhowResultTool, "run", json!({ "success": false })).await;
-    assert_eq!(result, json!({ "error": "io error" }));
+    let t = text(call(&AnyhowResultTool, "run", json!({ "success": false })).await);
+    assert!(t.contains("io error"));
 }
 
 #[tokio::test]
 async fn result_tool_with_typed_error_returns_ok_value() {
-    let result = call(&AnyhowResultTool, "run", json!({ "success": true })).await;
+    let result = json_val(call(&AnyhowResultTool, "run", json!({ "success": true })).await);
     assert_eq!(result, json!(42));
 }

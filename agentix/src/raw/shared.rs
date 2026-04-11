@@ -135,3 +135,29 @@ impl From<crate::request::ResponseFormat> for ResponseFormat {
         }
     }
 }
+
+// ── Tool result wire format helpers ──────────────────────────────────────────
+
+/// The wire-format representation of a tool result's content.
+///
+/// Most providers accept either a plain string (for simple text results) or an
+/// array of content parts (for mixed text/image results). This enum lets each
+/// provider adapter serialise whichever form is appropriate.
+#[derive(Debug)]
+pub enum ContentWire<'a> {
+    /// A single plain-text string — used when the result is exactly one text part.
+    Text(&'a str),
+    /// An array of content parts — used for multi-part or image-containing results.
+    Parts(&'a [crate::request::Content]),
+}
+
+/// Convert a `Vec<Content>` to the most compact wire representation:
+/// if the result is exactly one `Content::Text`, return `ContentWire::Text`;
+/// otherwise return `ContentWire::Parts`.
+pub fn content_to_wire(parts: &[crate::request::Content]) -> ContentWire<'_> {
+    if let [crate::request::Content::Text { text }] = parts {
+        ContentWire::Text(text.as_str())
+    } else {
+        ContentWire::Parts(parts)
+    }
+}
