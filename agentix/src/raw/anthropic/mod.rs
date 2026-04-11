@@ -11,7 +11,7 @@ use crate::msg::LlmEvent;
 use crate::provider::{PostConfig, post_streaming, post_json};
 use crate::request::{Message, ToolCall};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
 use response::{ContentBlockDelta, ContentBlockStart, ResponseBlock, StreamEvent};
 
@@ -101,6 +101,7 @@ pub(crate) async fn complete_anthropic(
         reasoning: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf) },
         tool_calls,
         usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+        finish_reason: raw.stop_reason.as_deref().map(FinishReason::from),
     })
 }
 

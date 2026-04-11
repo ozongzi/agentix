@@ -5,6 +5,7 @@ use serde_json::Value;
 pub struct Response {
     pub content: Vec<ResponseBlock>,
     pub usage: Option<Usage>,
+    pub stop_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

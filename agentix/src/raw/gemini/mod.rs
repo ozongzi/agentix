@@ -11,7 +11,7 @@ use crate::msg::LlmEvent;
 use crate::provider::{PostConfig, post_streaming, post_json};
 use crate::request::{Message, ToolCall};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
 use response::Response;
 
@@ -83,8 +83,10 @@ pub(crate) async fn complete_gemini(
 
     let mut content_buf = String::new();
     let mut tool_calls = Vec::new();
+    let mut finish_reason = None;
 
     if let Some(candidate) = raw.candidates.and_then(|mut c| if c.is_empty() { None } else { Some(c.remove(0)) }) {
+        finish_reason = candidate.finish_reason.as_deref().map(FinishReason::from);
         for part in candidate.content.parts {
             if let Some(t) = part.text.filter(|s| !s.is_empty()) {
                 content_buf.push_str(&t);
@@ -104,6 +106,7 @@ pub(crate) async fn complete_gemini(
         reasoning: None,
         tool_calls,
         usage: raw.usage_metadata.map(UsageStats::from).unwrap_or_default(),
+        finish_reason,
     })
 }
 

@@ -11,7 +11,7 @@ use crate::msg::LlmEvent;
 use crate::provider::{PostConfig, post_streaming, post_json};
 use crate::request::{Message, ToolCall, ToolChoice};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{CompleteResponse, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
 use response::{StreamChunk, DeltaToolCall};
 
@@ -154,6 +154,9 @@ pub(crate) async fn complete_openai_compatible(
         .map_err(ApiError::Json)?;
 
     let choice = raw.choices.into_iter().next();
+    let finish_reason = choice.as_ref()
+        .and_then(|c| c.finish_reason.as_deref())
+        .map(FinishReason::from);
     let msg = choice.map(|c| c.message);
 
     Ok(CompleteResponse {
@@ -167,5 +170,6 @@ pub(crate) async fn complete_openai_compatible(
             }).collect()
         }).unwrap_or_default(),
         usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+        finish_reason,
     })
 }

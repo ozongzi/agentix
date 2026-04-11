@@ -59,6 +59,7 @@ pub struct CompleteResponse {
 #[derive(Debug, Deserialize)]
 pub struct CompleteChoice {
     pub message: CompleteMessage,
+    pub finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

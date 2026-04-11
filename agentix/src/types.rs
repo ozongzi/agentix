@@ -24,7 +24,50 @@ impl std::ops::AddAssign for UsageStats {
     }
 }
 
-// ── Non-streaming response ────────────────────────────────────────────────────
+// ── Finish reason ─────────────────────────────────────────────────────────────
+
+/// Why the model stopped generating.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishReason {
+    /// Natural end of the response.
+    Stop,
+    /// Hit the `max_tokens` limit — response may be truncated.
+    Length,
+    /// The model emitted one or more tool calls.
+    ToolCalls,
+    /// Content was filtered by the provider's safety system.
+    ContentFilter,
+    /// Any other provider-specific reason not covered above.
+    Other(String),
+}
+
+impl FinishReason {
+    /// Returns `true` if the response was truncated due to token limit.
+    pub fn is_truncated(&self) -> bool {
+        matches!(self, FinishReason::Length)
+    }
+}
+
+impl From<&str> for FinishReason {
+    fn from(s: &str) -> Self {
+        match s {
+            // OpenAI / Gemini
+            "stop" | "STOP" => FinishReason::Stop,
+            "length" | "MAX_TOKENS" => FinishReason::Length,
+            "tool_calls" | "MALFORMED_FUNCTION_CALL" => FinishReason::ToolCalls,
+            "content_filter" | "SAFETY" | "PROHIBITED_CONTENT" | "SPII" | "BLOCKLIST" => FinishReason::ContentFilter,
+            // Anthropic
+            "end_turn" => FinishReason::Stop,
+            "max_tokens" => FinishReason::Length,
+            "tool_use" => FinishReason::ToolCalls,
+            "stop_sequence" => FinishReason::Stop,
+            other => FinishReason::Other(other.to_string()),
+        }
+    }
+}
+
+
 
 /// The result of a non-streaming (complete) API call.
 #[derive(Debug, Clone, Default)]
@@ -37,6 +80,8 @@ pub struct CompleteResponse {
     pub tool_calls: Vec<crate::request::ToolCall>,
     /// Token usage statistics.
     pub usage: UsageStats,
+    /// Why the model stopped generating.
+    pub finish_reason: Option<FinishReason>,
 }
 
 impl CompleteResponse {

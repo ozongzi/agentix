@@ -57,7 +57,7 @@ pub use request::{
     Content, ImageContent, ImageData, Message, Provider, Request, ResponseFormat,
     ToolCall, ToolChoice, UserContent, truncate_to_token_budget,
 };
-pub use types::{CompleteResponse, UsageStats};
+pub use types::{CompleteResponse, FinishReason, UsageStats};
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
 pub use agent::{AgentEvent, AgentTurnsStream, agent, agent_turns};
 
