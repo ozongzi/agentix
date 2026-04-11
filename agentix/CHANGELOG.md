@@ -2,6 +2,22 @@
 
 ---
 
+## [0.13.0] - 2026-04-11
+
+### New features
+
+**`FinishReason` — why the model stopped**
+- New `agentix::FinishReason` enum: `Stop`, `Length`, `ToolCalls`, `ContentFilter`, `Other(String)`.
+- `CompleteResponse` now has a `finish_reason: FinishReason` field (non-optional, defaults to `Stop`).
+- `FinishReason::is_truncated()` convenience method.
+- Mapped from all three providers: OpenAI/Gemini `finish_reason`, Anthropic `stop_reason`.
+
+### Breaking changes
+
+- `CompleteResponse` has a new required field `finish_reason: FinishReason`. Any code that constructs `CompleteResponse { ... }` directly will need to add `finish_reason: FinishReason::Stop` (or the appropriate variant).
+
+---
+
 ## [0.12.0] - 2026-04-11
 
 ### Summary
