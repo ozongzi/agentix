@@ -425,7 +425,7 @@ impl Tool for McpTool {
                 Ok(r) => r,
                 Err(e) => {
                     error!(tool = %name_str, "MCP tool call task panicked: {e}");
-                    yield crate::tool_trait::ToolOutput::Result(serde_json::json!({ "error": e.to_string() }));
+                    yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(format!("{{\"error\":\"{e}\"}}"))]);
                     return;
                 }
             };
@@ -453,48 +453,43 @@ impl Tool for McpTool {
                             yield crate::tool_trait::ToolOutput::Progress(text);
                         }
                         let result_value = last;
-                        if let Some(max_chars) = max_output_chars {
-                            let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                        let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                        let text = if let Some(max_chars) = max_output_chars {
                             if json_string.len() > max_chars {
                                 let mut limit = max_chars.saturating_sub(40);
                                 limit = json_string.floor_char_boundary(limit);
-                                let truncated = &json_string[..limit];
-                                yield crate::tool_trait::ToolOutput::Result(serde_json::Value::String(format!(
-                                    "{}...<truncated {} chars>",
-                                    truncated,
-                                    json_string.len()
-                                )));
-                                return;
+                                format!("{}...<truncated {} chars>", &json_string[..limit], json_string.len())
+                            } else {
+                                json_string
                             }
-                        }
-                        yield crate::tool_trait::ToolOutput::Result(result_value);
+                        } else {
+                            json_string
+                        };
+                        yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(text)]);
                     } else {
                         let result_value = match contents.len() {
                             0 => serde_json::json!({ "result": null }),
                             _ => contents.into_iter().next().unwrap(),
                         };
 
-                        if let Some(max_chars) = max_output_chars {
-                            let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                        let json_string = serde_json::to_string(&result_value).unwrap_or_default();
+                        let text = if let Some(max_chars) = max_output_chars {
                             if json_string.len() > max_chars {
                                 let mut limit = max_chars.saturating_sub(40);
                                 limit = json_string.floor_char_boundary(limit);
-                                let truncated = &json_string[..limit];
-                                yield crate::tool_trait::ToolOutput::Result(serde_json::Value::String(format!(
-                                    "{}...<truncated {} chars>",
-                                    truncated,
-                                    json_string.len()
-                                )));
-                                return;
+                                format!("{}...<truncated {} chars>", &json_string[..limit], json_string.len())
+                            } else {
+                                json_string
                             }
-                        }
-
-                        yield crate::tool_trait::ToolOutput::Result(result_value);
+                        } else {
+                            json_string
+                        };
+                        yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(text)]);
                     }
                 }
                 Err(e) => {
                     error!(tool = %name_str, error = %e, "MCP tool call failed");
-                    yield crate::tool_trait::ToolOutput::Result(serde_json::json!({ "error": e.to_string() }));
+                    yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(format!("{{\"error\":\"{e}\"}}"))]);
                 }
             }
         };
