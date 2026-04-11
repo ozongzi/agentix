@@ -196,9 +196,9 @@ pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
 
     // Also skip past an Assistant-with-tool-calls whose ToolResults follow,
     // otherwise those ToolResults would become orphaned after the drain.
-    if keep_from < history.len() {
-        if let Message::Assistant { tool_calls, .. } = &history[keep_from] {
-            if !tool_calls.is_empty() {
+    if keep_from < history.len()
+        && let Message::Assistant { tool_calls, .. } = &history[keep_from]
+            && !tool_calls.is_empty() {
                 // Collect the tool_call ids that belong to this assistant turn.
                 let ids: std::collections::HashSet<&str> =
                     tool_calls.iter().map(|tc| tc.id.as_str()).collect();
@@ -213,8 +213,6 @@ pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
                     }
                 }
             }
-        }
-    }
 
     // Safety: always keep at least one message.
     if keep_from >= history.len() {
