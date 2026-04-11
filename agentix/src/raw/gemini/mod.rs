@@ -106,7 +106,7 @@ pub(crate) async fn complete_gemini(
         reasoning: None,
         tool_calls,
         usage: raw.usage_metadata.map(UsageStats::from).unwrap_or_default(),
-        finish_reason,
+        finish_reason: finish_reason.unwrap_or_default(),
     })
 }
 

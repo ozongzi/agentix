@@ -27,10 +27,11 @@ impl std::ops::AddAssign for UsageStats {
 // ── Finish reason ─────────────────────────────────────────────────────────────
 
 /// Why the model stopped generating.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     /// Natural end of the response.
+    #[default]
     Stop,
     /// Hit the `max_tokens` limit — response may be truncated.
     Length,
@@ -49,6 +50,7 @@ impl FinishReason {
     }
 }
 
+
 impl From<&str> for FinishReason {
     fn from(s: &str) -> Self {
         match s {
@@ -66,9 +68,6 @@ impl From<&str> for FinishReason {
         }
     }
 }
-
-
-
 /// The result of a non-streaming (complete) API call.
 #[derive(Debug, Clone, Default)]
 pub struct CompleteResponse {
@@ -81,7 +80,7 @@ pub struct CompleteResponse {
     /// Token usage statistics.
     pub usage: UsageStats,
     /// Why the model stopped generating.
-    pub finish_reason: Option<FinishReason>,
+    pub finish_reason: FinishReason,
 }
 
 impl CompleteResponse {

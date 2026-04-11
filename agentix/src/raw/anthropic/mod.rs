@@ -101,7 +101,7 @@ pub(crate) async fn complete_anthropic(
         reasoning: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf) },
         tool_calls,
         usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
-        finish_reason: raw.stop_reason.as_deref().map(FinishReason::from),
+        finish_reason: raw.stop_reason.as_deref().map(FinishReason::from).unwrap_or_default(),
     })
 }
 
