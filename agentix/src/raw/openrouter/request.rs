@@ -29,10 +29,10 @@ pub struct Request {
 #[serde(rename_all = "lowercase")]
 pub enum OaiMessage {
     System {
-        content: String,
+        content: MessageContent,
     },
     User {
-        content: UserMessageContent,
+        content: MessageContent,
     },
     Assistant {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,7 +48,7 @@ pub enum OaiMessage {
 
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
-pub enum UserMessageContent {
+pub enum MessageContent {
     Text(String),
     Parts(Vec<ContentPart>),
 }
@@ -72,6 +72,12 @@ pub enum ContentPart {
 #[derive(Debug, Serialize, Clone)]
 pub struct CacheControl {
     pub r#type: String,
+}
+
+impl CacheControl {
+    fn ephemeral() -> Self {
+        CacheControl { r#type: "ephemeral".to_string() }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -105,7 +111,9 @@ pub(crate) fn build_openrouter_request(
     if let Some(s) = &config.system_prompt
         && !s.is_empty()
     {
-        messages.push(OaiMessage::System { content: s.clone() });
+        messages.push(OaiMessage::System {
+            content: MessageContent::Text(s.clone()),
+        });
     }
     for m in history {
         match m {
@@ -145,6 +153,9 @@ pub(crate) fn build_openrouter_request(
             }
         }
     }
+
+    stamp_cache_breakpoints(&mut messages);
+
     let tools_opt = if tools.is_empty() {
         None
     } else {
@@ -171,7 +182,7 @@ pub(crate) fn build_openrouter_request(
     }
 }
 
-fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {
+fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
     let blocks: Vec<ContentPart> = parts
         .into_iter()
         .map(|p| match p {
@@ -193,7 +204,60 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {
         .collect();
 
     if let [ContentPart::Text { text, .. }] = blocks.as_slice() {
-        return UserMessageContent::Text(text.clone());
+        return MessageContent::Text(text.clone());
     }
-    UserMessageContent::Parts(blocks)
+    MessageContent::Parts(blocks)
+}
+
+// Stamp cache_control: ephemeral on system prompt, first user message (summary), and last user message (latest turn).
+fn stamp_cache_breakpoints(messages: &mut Vec<OaiMessage>) {
+    let mut first_user: Option<usize> = None;
+    let mut last_user: Option<usize> = None;
+
+    for (i, msg) in messages.iter_mut().enumerate() {
+        match msg {
+            OaiMessage::System { content } => stamp_cache(content),
+            OaiMessage::User { .. } => {
+                first_user.get_or_insert(i);
+                last_user = Some(i);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(f) = first_user {
+        if let OaiMessage::User { content } = &mut messages[f] {
+            stamp_cache(content);
+        }
+        if let Some(l) = last_user.filter(|&l| l != f) {
+            if let OaiMessage::User { content } = &mut messages[l] {
+                stamp_cache(content);
+            }
+        }
+    }
+}
+
+fn stamp_cache(content: &mut MessageContent) {
+    match content {
+        MessageContent::Text(text) => {
+            *content = MessageContent::Parts(vec![ContentPart::Text {
+                text: text.clone(),
+                cache_control: Some(CacheControl::ephemeral()),
+            }]);
+        }
+        MessageContent::Parts(parts) => {
+            if let Some(last) = parts.last_mut() {
+                set_cache_control(last);
+            }
+        }
+    }
+}
+
+fn set_cache_control(part: &mut ContentPart) {
+    match part {
+        ContentPart::Text { cache_control, .. }
+        | ContentPart::ImageUrl { cache_control, .. } => {
+            *cache_control = Some(CacheControl::ephemeral());
+        }
+    }
 }
