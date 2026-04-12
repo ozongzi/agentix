@@ -6,7 +6,7 @@
 
 Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, agentic loops, and MCP support.
 
-DeepSeek · OpenAI · Anthropic · Gemini · Kimi · GLM · MiniMax · Grok — one unified API.
+DeepSeek · OpenAI · Anthropic · Gemini · Kimi · GLM · MiniMax · Grok · OpenRouter — one unified API.
 
 ---
 
@@ -138,7 +138,7 @@ agentix = "0.9"
 
 ## Providers
 
-Eight built-in providers, all using the same API:
+Nine built-in providers, all using the same API:
 
 ```rust
 use agentix::Request;
@@ -152,8 +152,9 @@ let req = Request::kimi("...");       // Moonshot AI — kimi-k2.5
 let req = Request::glm("...");        // Zhipu AI — glm-5
 let req = Request::minimax("...");    // MiniMax — MiniMax-M2.7 (Anthropic API)
 let req = Request::grok("xai-...");
+let req = Request::openrouter("sk-or-..."); // OpenRouter with prompt caching support
 
-// Any OpenAI-compatible endpoint (e.g. OpenRouter)
+// Custom base URL for OpenAI-compatible endpoints
 let req = Request::openai("sk-or-...")
     .base_url("https://openrouter.ai/api/v1")
     .model("openrouter/free");

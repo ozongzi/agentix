@@ -11,6 +11,7 @@ pub mod anthropic;
 pub mod deepseek;
 pub mod gemini;
 pub mod openai;
+pub mod openrouter;
 pub mod shared;
 
 pub use shared::{FunctionDefinition, FunctionName, JsonSchemaBody, ResponseFormat, ToolChoice, ToolChoiceFunction, ToolChoiceMode, ToolDefinition, ToolKind};
