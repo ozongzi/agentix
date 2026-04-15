@@ -122,7 +122,8 @@ fn find_usage(events: &[LlmEvent]) -> Option<&agentix::types::UsageStats> {
 }
 
 fn http() -> reqwest::Client {
-    reqwest::Client::new()
+    // no_proxy ensures 127.0.0.1 isn't routed through system proxy (e.g. Clash)
+    reqwest::Client::builder().no_proxy().build().unwrap()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
