@@ -14,6 +14,10 @@ pub struct UsageStats {
     pub completion_tokens: usize,
     /// Total tokens used (prompt + completion).
     pub total_tokens: usize,
+    /// Tokens read from the provider's prompt cache (Anthropic: cache_read_input_tokens).
+    pub cache_read_tokens: usize,
+    /// Tokens written into the provider's prompt cache (Anthropic: cache_creation_input_tokens).
+    pub cache_creation_tokens: usize,
 }
 
 impl std::ops::AddAssign for UsageStats {
@@ -21,6 +25,8 @@ impl std::ops::AddAssign for UsageStats {
         self.prompt_tokens += rhs.prompt_tokens;
         self.completion_tokens += rhs.completion_tokens;
         self.total_tokens += rhs.total_tokens;
+        self.cache_read_tokens += rhs.cache_read_tokens;
+        self.cache_creation_tokens += rhs.cache_creation_tokens;
     }
 }
 

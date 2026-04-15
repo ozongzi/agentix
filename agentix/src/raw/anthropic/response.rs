@@ -20,14 +20,20 @@ pub enum ResponseBlock {
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
 }
 
 impl From<Usage> for crate::types::UsageStats {
     fn from(u: Usage) -> Self {
         Self {
-            prompt_tokens:      u.input_tokens as usize,
-            completion_tokens:  u.output_tokens as usize,
-            total_tokens:      (u.input_tokens + u.output_tokens) as usize,
+            prompt_tokens:          u.input_tokens as usize,
+            completion_tokens:      u.output_tokens as usize,
+            total_tokens:          (u.input_tokens + u.output_tokens) as usize,
+            cache_read_tokens:      u.cache_read_input_tokens as usize,
+            cache_creation_tokens:  u.cache_creation_input_tokens as usize,
         }
     }
 }

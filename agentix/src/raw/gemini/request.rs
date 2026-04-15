@@ -159,15 +159,28 @@ pub(crate) fn build_gemini_request(
                 }
             }
             Message::ToolResult { call_id, content } => {
-                use crate::raw::shared::{content_to_wire, ContentWire};
-                let response = match content_to_wire(content) {
-                    ContentWire::Text(t) => serde_json::json!({ "result": t }),
-                    ContentWire::Parts(parts) => serde_json::json!({ "parts": parts }),
-                };
+                use crate::request::Content;
+                let text = content.iter()
+                    .filter_map(|p| if let Content::Text { text } = p { Some(text.as_str()) } else { None })
+                    .collect::<Vec<_>>()
+                    .join("\n");
                 pending_fn_responses.push(Part::FunctionResponse(FunctionResponse {
                     name: call_id.clone(),
-                    response,
+                    response: serde_json::json!({ "result": text }),
                 }));
+                // Append image parts alongside the function response in the same content block.
+                for p in content {
+                    if let Content::Image(img) = p {
+                        let data = match &img.data {
+                            ImageData::Base64(b) => b.clone(),
+                            ImageData::Url(u) => u.clone(),
+                        };
+                        pending_fn_responses.push(Part::InlineData(Blob {
+                            mime_type: img.mime_type.clone(),
+                            data,
+                        }));
+                    }
+                }
             }
         }
     }

@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::quote;
+use syn::spanned::Spanned as _;
 use syn::{Expr, FnArg, ImplItem, ItemFn, ItemImpl, Lit, Meta, Pat, Type, parse_macro_input};
 
 fn extract_doc(attrs: &[syn::Attribute]) -> Vec<String> {
@@ -59,6 +60,42 @@ fn parse_doc(lines: &[String]) -> (String, std::collections::HashMap<String, Str
     (desc_lines.join(" ").trim().to_string(), params)
 }
 
+/// Returns true if `ty` is `serde_json::Value` or plain `Value`.
+fn is_json_value(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else { return false };
+    let segs: Vec<String> = tp.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    matches!(
+        segs.iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice(),
+        ["Value"] | ["serde_json", "Value"] | ["serde_json", "value", "Value"]
+    )
+}
+
+/// Returns true if `ty` is `Vec<serde_json::Value>` or `Vec<Value>`.
+fn is_untyped_vec(ty: &Type) -> bool {
+    let Type::Path(tp) = ty else { return false };
+    let Some(last) = tp.path.segments.last() else { return false };
+    if last.ident != "Vec" { return false }
+    let syn::PathArguments::AngleBracketed(ref args) = last.arguments else { return false };
+    let Some(syn::GenericArgument::Type(inner)) = args.args.first() else { return false };
+    is_json_value(inner)
+}
+
+/// Emit a compile error if the param type would produce an invalid array schema.
+fn check_param_type(tool_name: &str, param_name: &str, ty: &Type) -> Option<TokenStream2> {
+    if is_untyped_vec(ty) {
+        let msg = format!(
+            "tool '{}' param '{}': Vec<Value> produces an array schema without 'items', \
+             which is rejected by Azure/OpenAI. \
+             Use a typed struct instead: Vec<MyStruct> where MyStruct derives JsonSchema. \
+             If you only target Anthropic/Gemini, add #[not_for_openai] on the method to suppress this error.",
+            tool_name, param_name
+        );
+        Some(syn::Error::new(ty.span(), msg).to_compile_error())
+    } else {
+        None
+    }
+}
+
 fn is_option(ty: &Type) -> bool {
     if let Type::Path(tp) = ty
         && let Some(seg) = tp.path.segments.last()
@@ -74,6 +111,14 @@ fn has_streaming_attr(attrs: &[syn::Attribute]) -> bool {
 
 fn strip_streaming_attr(attrs: &mut Vec<syn::Attribute>) {
     attrs.retain(|a| !a.path().is_ident("streaming"));
+}
+
+fn has_not_for_openai_attr(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| a.path().is_ident("not_for_openai"))
+}
+
+fn strip_not_for_openai_attr(attrs: &mut Vec<syn::Attribute>) {
+    attrs.retain(|a| !a.path().is_ident("not_for_openai"));
 }
 
 struct ToolMethod {
@@ -137,15 +182,17 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Single-function form: `#[tool]` on a standalone fn.
     if let Ok(mut item_fn) = syn::parse::<ItemFn>(item.clone()) {
         let is_streaming = has_streaming_attr(&item_fn.attrs);
+        let skip_openai_check = has_not_for_openai_attr(&item_fn.attrs);
         strip_streaming_attr(&mut item_fn.attrs);
-        return tool_from_fn(attr, item_fn, is_streaming);
+        strip_not_for_openai_attr(&mut item_fn.attrs);
+        return tool_from_fn(attr, item_fn, is_streaming, skip_openai_check);
     }
     tool_from_impl(attr, item)
 }
 
 // ── Generators ────────────────────────────────────────────────────────────────
 
-fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> TokenStream {
+fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool, skip_openai_check: bool) -> TokenStream {
     let fn_name = item_fn.sig.ident.to_string();
     let struct_ident = item_fn.sig.ident.clone();
 
@@ -165,6 +212,7 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
     let (description, param_docs) = parse_doc(&doc_lines);
 
     let mut params = vec![];
+    let mut schema_errors: Vec<TokenStream2> = vec![];
     for arg in &item_fn.sig.inputs {
         if let FnArg::Typed(pt) = arg {
             let name = if let Pat::Ident(pi) = &*pt.pat {
@@ -173,6 +221,11 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
                 continue;
             };
             let ty = (*pt.ty).clone();
+            if !skip_openai_check {
+                if let Some(err) = check_param_type(&tool_name, &name, &ty) {
+                    schema_errors.push(err);
+                }
+            }
             let desc = param_docs.get(&name).cloned().unwrap_or_default();
             let optional = is_option(&ty);
             params.push(ParamInfo { name, ty, desc, optional });
@@ -192,6 +245,7 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool) -> Token
     let call_arm = generate_call_arm(&method);
 
     let expanded = quote! {
+        #(#schema_errors)*
         #[allow(non_camel_case_types)]
         pub struct #struct_ident;
 
@@ -239,15 +293,18 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let mut tool_methods: Vec<ToolMethod> = vec![];
+    let mut schema_errors: Vec<TokenStream2> = vec![];
 
     for item in &mut item_impl.items {
         if let ImplItem::Fn(method) = item {
             let is_streaming = has_streaming_attr(&method.attrs);
+            let skip_openai_check = has_not_for_openai_attr(&method.attrs);
             // Skip non-async, non-streaming methods.
             if !is_streaming && method.sig.asyncness.is_none() {
                 continue;
             }
             strip_streaming_attr(&mut method.attrs);
+            strip_not_for_openai_attr(&mut method.attrs);
 
             let fn_name = method.sig.ident.to_string();
             let tool_name = override_name.clone().unwrap_or_else(|| fn_name.clone());
@@ -263,6 +320,11 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                         continue;
                     };
                     let ty = (*pt.ty).clone();
+                    if !skip_openai_check {
+                        if let Some(err) = check_param_type(&tool_name, &name, &ty) {
+                            schema_errors.push(err);
+                        }
+                    }
                     let desc = param_docs.get(&name).cloned().unwrap_or_default();
                     let optional = is_option(&ty);
                     params.push(ParamInfo { name, ty, desc, optional });
@@ -284,6 +346,7 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let self_ty = &item_impl.self_ty;
 
     let expanded = quote! {
+        #(#schema_errors)*
         #[agentix::async_trait::async_trait]
         impl agentix::tool_trait::Tool for #self_ty {
             fn raw_tools(&self) -> Vec<agentix::raw::shared::ToolDefinition> {

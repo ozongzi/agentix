@@ -566,18 +566,9 @@ impl Request {
 
         match self.provider {
             Provider::DeepSeek => {
-                use crate::raw::deepseek::prepare_history;
-                use crate::raw::openai::stream_openai_compatible;
-                let config = degrade_json_schema_for_deepseek(config);
-                stream_openai_compatible(
-                    &self.api_key,
-                    http,
-                    &config,
-                    messages,
-                    tools,
-                    Some(prepare_history),
-                )
-                .await
+                crate::raw::deepseek::stream_deepseek(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
             }
             Provider::OpenAI => {
                 use crate::raw::openai::stream_openai_compatible;
@@ -632,18 +623,9 @@ impl Request {
 
         match self.provider {
             Provider::DeepSeek => {
-                use crate::raw::deepseek::prepare_history;
-                use crate::raw::openai::complete_openai_compatible;
-                let config = degrade_json_schema_for_deepseek(config);
-                complete_openai_compatible(
-                    &self.api_key,
-                    http,
-                    &config,
-                    messages,
-                    tools,
-                    Some(prepare_history),
-                )
-                .await
+                crate::raw::deepseek::complete_deepseek(
+                    &self.api_key, http, &config, messages, tools,
+                ).await
             }
             Provider::OpenAI => {
                 use crate::raw::openai::complete_openai_compatible;
@@ -710,20 +692,6 @@ impl Request {
     }
 }
 
-/// DeepSeek supports `json_object` but not `json_schema`.
-/// Silently degrade so callers don't have to branch on provider.
-fn degrade_json_schema_for_deepseek(
-    mut config: crate::config::AgentConfig,
-) -> crate::config::AgentConfig {
-    if matches!(
-        config.response_format,
-        Some(ResponseFormat::JsonSchema { .. })
-    ) {
-        tracing::warn!("DeepSeek does not support json_schema; degrading to json_object");
-        config.response_format = Some(ResponseFormat::JsonObject);
-    }
-    config
-}
 
 #[cfg(test)]
 mod truncate_tests {

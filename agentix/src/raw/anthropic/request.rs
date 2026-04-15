@@ -80,8 +80,24 @@ pub enum ContentBlock {
     },
     ToolResult {
         tool_use_id: String,
-        content: String,
+        content: ToolResultContent,
     },
+}
+
+/// Content payload for a `tool_result` block.
+/// Anthropic accepts either a plain string or an array of text/image parts.
+#[derive(Debug, Serialize, Clone)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    Text(String),
+    Parts(Vec<ToolResultPart>),
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResultPart {
+    Text { text: String },
+    Image { source: ImageSource },
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -158,11 +174,24 @@ pub(crate) fn build_anthropic_request(
                 }
             }
             Message::ToolResult { call_id, content } => {
-                use crate::raw::shared::{content_to_wire, ContentWire};
-                let wire_content = match content_to_wire(content) {
-                    ContentWire::Text(t) => t.to_string(),
-                    ContentWire::Parts(parts) => serde_json::to_string(parts)
-                        .unwrap_or_default(),
+                use crate::request::Content;
+                let wire_content = if let [Content::Text { text }] = content.as_slice() {
+                    ToolResultContent::Text(text.clone())
+                } else {
+                    let parts = content.iter().filter_map(|p| match p {
+                        Content::Text { text } => Some(ToolResultPart::Text { text: text.clone() }),
+                        Content::Image(img) => {
+                            let source = match &img.data {
+                                ImageData::Base64(data) => ImageSource::Base64 {
+                                    media_type: img.mime_type.clone(),
+                                    data: data.clone(),
+                                },
+                                ImageData::Url(url) => ImageSource::Url { url: url.clone() },
+                            };
+                            Some(ToolResultPart::Image { source })
+                        }
+                    }).collect();
+                    ToolResultContent::Parts(parts)
                 };
                 pending_tool_results.push(ContentBlock::ToolResult {
                     tool_use_id: call_id.clone(),

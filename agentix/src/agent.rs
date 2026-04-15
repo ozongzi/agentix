@@ -115,7 +115,7 @@ pub fn agent(
     let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
 
     Box::pin(stream! {
-    let mut total_usage = UsageStats { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    let mut total_usage = UsageStats::default();
     loop {
             // ── Truncate history if budget set ────────────────────────
             if let Some(budget) = history_budget {

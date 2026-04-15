@@ -44,8 +44,15 @@ pub enum OaiMessage {
     },
     Tool {
         tool_call_id: String,
-        content: String,
+        content: ToolMessageContent,
     },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ToolMessageContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
 }
 
 #[derive(Debug, Serialize)]
@@ -123,14 +130,25 @@ pub(crate) fn build_oai_request(
                 });
             }
             Message::ToolResult { call_id, content } => {
-                use crate::raw::shared::{ContentWire, content_to_wire};
-                let wire_content = match content_to_wire(&content) {
-                    ContentWire::Text(t) => t.to_string(),
-                    ContentWire::Parts(parts) => serde_json::to_string(parts).unwrap_or_default(),
+                use crate::request::Content;
+                let tool_content = if let [Content::Text { text }] = content.as_slice() {
+                    ToolMessageContent::Text(text.clone())
+                } else {
+                    let parts = content.iter().filter_map(|p| match p {
+                        Content::Text { text } => Some(ContentPart::Text { text: text.clone() }),
+                        Content::Image(img) => {
+                            let url = match &img.data {
+                                ImageData::Base64(b) => format!("data:{};base64,{}", img.mime_type, b),
+                                ImageData::Url(u) => u.clone(),
+                            };
+                            Some(ContentPart::ImageUrl { image_url: ImageUrl { url, detail: None } })
+                        }
+                    }).collect();
+                    ToolMessageContent::Parts(parts)
                 };
                 messages.push(OaiMessage::Tool {
-                    tool_call_id: call_id.clone(),
-                    content: wire_content,
+                    tool_call_id: call_id,
+                    content: tool_content,
                 });
             }
         }

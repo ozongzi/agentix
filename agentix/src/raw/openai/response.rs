@@ -41,10 +41,18 @@ pub struct DeltaFunctionCall {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct PromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: u32,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
 // ── Non-streaming response ────────────────────────────────────────────────────
@@ -90,6 +98,10 @@ impl From<Usage> for crate::types::UsageStats {
             prompt_tokens:     u.prompt_tokens as usize,
             completion_tokens: u.completion_tokens as usize,
             total_tokens:      u.total_tokens as usize,
+            cache_read_tokens: u.prompt_tokens_details
+                .map(|d| d.cached_tokens as usize)
+                .unwrap_or(0),
+            ..Default::default()
         }
     }
 }
