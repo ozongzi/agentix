@@ -123,16 +123,33 @@ pub enum ToolChoice {
     Tool { name: String },
 }
 
+/// Merge consecutive `Message::User` entries into one by concatenating their
+/// content parts. Anthropic requires strict user/assistant alternation.
+fn merge_consecutive_user(messages: &[Message]) -> Vec<Message> {
+    let mut out: Vec<Message> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        if let Message::User(parts) = msg {
+            if let Some(Message::User(prev)) = out.last_mut() {
+                prev.extend(parts.iter().cloned());
+                continue;
+            }
+        }
+        out.push(msg.clone());
+    }
+    out
+}
+
 pub(crate) fn build_anthropic_request(
     config: &AgentConfig,
     messages: &[Message],
     tools: &[ToolDefinition],
     stream: bool,
 ) -> Request {
+    let messages = merge_consecutive_user(messages);
     let mut out_messages: Vec<RequestMessage> = Vec::new();
     let mut pending_tool_results: Vec<ContentBlock> = Vec::new();
 
-    for msg in messages {
+    for msg in &messages {
         match msg {
             Message::User(parts) => {
                 if !pending_tool_results.is_empty() {
