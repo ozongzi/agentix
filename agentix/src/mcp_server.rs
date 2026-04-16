@@ -56,10 +56,40 @@ use rmcp::{
     },
     service::{RequestContext, RoleServer, serve_server},
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use tracing::info;
 
+use crate::request::{Content as AgentixContent, ImageData};
 use crate::tool_trait::{Tool, ToolBundle};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Resolve an image URL into base64-encoded bytes. Handles `data:` URLs
+/// locally (no network) and otherwise performs an HTTP GET via reqwest.
+async fn fetch_image_as_base64(url: &str) -> Result<String, String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+
+    if let Some(rest) = url.strip_prefix("data:") {
+        // data:<mime>[;base64],<payload>
+        if let Some((meta, payload)) = rest.split_once(',') {
+            if meta.contains(";base64") {
+                return Ok(payload.to_string());
+            }
+            return Ok(STANDARD.encode(payload.as_bytes()));
+        }
+        return Err("malformed data URL".into());
+    }
+
+    let bytes = reqwest::get(url)
+        .await
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(STANDARD.encode(&bytes))
+}
 
 // ── McpServerError ────────────────────────────────────────────────────────────
 
@@ -216,7 +246,7 @@ impl ServerHandler for McpService {
             let progress_token = context.meta.get_progress_token();
 
             let mut stream = tools.call(&name, arguments).await;
-            let mut final_result: Value = json!(null);
+            let mut final_result: Vec<AgentixContent> = Vec::new();
             let mut step: f64 = 0.0;
 
             while let Some(output) = stream.next().await {
@@ -238,13 +268,25 @@ impl ServerHandler for McpService {
                 }
             }
 
-            let is_error = final_result.is_object() && final_result.get("error").is_some();
-            let text = serde_json::to_string(&final_result).unwrap_or_default();
-            if is_error {
-                Ok(CallToolResult::error(vec![Content::text(text)]))
-            } else {
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+            let mut contents: Vec<Content> = Vec::with_capacity(final_result.len());
+            for c in final_result {
+                contents.push(match c {
+                    AgentixContent::Text { text } => Content::text(text),
+                    AgentixContent::Image(img) => {
+                        let mime = img.mime_type;
+                        match img.data {
+                            ImageData::Base64(d) => Content::image(d, mime),
+                            ImageData::Url(url) => match fetch_image_as_base64(&url).await {
+                                Ok(b64) => Content::image(b64, mime),
+                                Err(e) => Content::text(format!(
+                                    "[image fetch failed: {url} ({e})]"
+                                )),
+                            },
+                        }
+                    }
+                });
             }
+            Ok(CallToolResult::success(contents))
         }
     }
 

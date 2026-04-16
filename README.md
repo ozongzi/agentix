@@ -128,10 +128,13 @@ let bundle = sqrt + MathTools { precision: 4 };  // compose with +
 
 ```toml
 [dependencies]
-agentix = "0.9"
+agentix = "0.15"
 
 # Optional: Model Context Protocol (MCP) tool support
-# agentix = { version = "0.9", features = ["mcp"] }
+# agentix = { version = "0.16", features = ["mcp"] }
+
+# Optional: drive `claude -p` as the agentic loop using a Claude Max OAuth session
+# agentix = { version = "0.16", features = ["claude-code"] }
 ```
 
 ---
@@ -433,6 +436,65 @@ async fn main() {
 - `Error(String)` — fatal error
 
 `agentix::agent()` returns a `BoxStream<'static, AgentEvent>` — drop it to abort.
+
+---
+
+## Claude Code (Max OAuth)
+
+`agent_claude_code()` drives the `claude` CLI in headless mode (`claude -p`) as
+the agentic loop, so you can ride an existing **Claude Max** subscription instead
+of paying per-token via `ANTHROPIC_API_KEY`. The CLI's OAuth session is read
+from the OS keychain; your agentix `Tool`s are exposed back to it through an
+in-process loopback MCP server.
+
+Requires the `claude-code` feature and the [`claude` CLI] installed + logged in.
+
+```toml
+agentix = { version = "0.16", features = ["claude-code"] }
+```
+
+```rust
+use agentix::{AgentEvent, ClaudeCodeConfig, Message, ToolBundle, UserContent, agent_claude_code, tool};
+use futures::StreamExt;
+
+struct Calculator;
+#[tool]
+impl agentix::Tool for Calculator {
+    /// Add two numbers.  a: first  b: second
+    async fn add(&self, a: f64, b: f64) -> f64 { a + b }
+}
+
+#[tokio::main]
+async fn main() {
+    let history = vec![Message::User(vec![UserContent::Text {
+        text: "What is 123 + 456?".into(),
+    }])];
+
+    let mut stream = agent_claude_code(
+        ToolBundle::default() + Calculator,
+        "You are a concise math assistant. Always use tools for arithmetic.",
+        ClaudeCodeConfig::new(),      // .model("sonnet"), .binary(..), .arg(..)
+        history,
+    );
+
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::Token(t) => print!("{t}"),
+            AgentEvent::ToolCallStart(tc) => println!("\n→ {}({})", tc.name, tc.arguments),
+            AgentEvent::Done(u) => println!("\n[tokens: {}]", u.total_tokens),
+            _ => {}
+        }
+    }
+}
+```
+
+The returned stream yields the same `AgentEvent`s as `agent()`, so code that
+consumes one backend consumes the other unchanged. Dropping the stream aborts
+the subprocess and cleans up temporary MCP-config and session files.
+
+See `examples/10_claude_code.rs` for a runnable example.
+
+[`claude` CLI]: https://docs.claude.com/en/docs/claude-code/overview
 
 ---
 

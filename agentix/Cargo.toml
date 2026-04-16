@@ -1,6 +1,6 @@
 [package]
 name = "agentix"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2024"
 description = "Multi-provider LLM client for Rust — streaming, non-streaming, tool calls, MCP, DeepSeek, OpenAI, Anthropic, Gemini"
 authors = ["ozongzi <ozongzi@icloud.com>"]
@@ -23,6 +23,11 @@ mcp-server = [
     "rmcp/transport-io",
     "rmcp/transport-streamable-http-server",
     "dep:axum",
+    "dep:base64",
+]
+claude-code = [
+    "mcp-server",
+    "dep:uuid",
 ]
 
 [dependencies]
@@ -47,7 +52,13 @@ rmcp = { version = "1.1", optional = true }
 
 # Optional: HTTP server for mcp-server feature
 axum = { version = "0.8", optional = true, default-features = false, features = ["http1", "tokio"] }
+
+# Optional: base64 encoding for fetched-URL images on mcp-server output
+base64 = { version = "0.22", optional = true }
 tokio-util = { version = "0.7.18", features = ["net"] }
+
+# Optional: UUID generation for Claude Code session files
+uuid = { version = "1", optional = true, features = ["v4"] }
 
 [dev-dependencies]
 axum = { version = "0.8", features = ["http1", "tokio"] }
