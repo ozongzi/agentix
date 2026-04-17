@@ -239,7 +239,7 @@ impl McpTool {
     /// ```no_run
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// use agentix::McpTool;
-    /// use rmcp::transport::SinkStreamTransport;
+    /// use rmcp::transport::sink_stream::SinkStreamTransport;
     /// // ... build your sink/stream from a WS connection ...
     /// // let tool = McpTool::from_transport(SinkStreamTransport::new(sink, stream)).await?;
     /// # Ok(()) }

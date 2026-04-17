@@ -598,9 +598,14 @@ impl Request {
                 )
                 .await
             }
-            Provider::Kimi | Provider::Glm | Provider::Grok => {
-                use crate::raw::openai::stream_openai_compatible;
-                stream_openai_compatible(&self.api_key, http, &config, messages, tools, None).await
+            Provider::Kimi => {
+                crate::raw::kimi::stream_kimi(&self.api_key, http, &config, messages, tools).await
+            }
+            Provider::Glm => {
+                crate::raw::glm::stream_glm(&self.api_key, http, &config, messages, tools).await
+            }
+            Provider::Grok => {
+                crate::raw::grok::stream_grok(&self.api_key, http, &config, messages, tools).await
             }
             Provider::OpenRouter => {
                 crate::raw::openrouter::stream_openrouter(
@@ -656,10 +661,14 @@ impl Request {
                 )
                 .await
             }
-            Provider::Kimi | Provider::Glm | Provider::Grok => {
-                use crate::raw::openai::complete_openai_compatible;
-                complete_openai_compatible(&self.api_key, http, &config, messages, tools, None)
-                    .await
+            Provider::Kimi => {
+                crate::raw::kimi::complete_kimi(&self.api_key, http, &config, messages, tools).await
+            }
+            Provider::Glm => {
+                crate::raw::glm::complete_glm(&self.api_key, http, &config, messages, tools).await
+            }
+            Provider::Grok => {
+                crate::raw::grok::complete_grok(&self.api_key, http, &config, messages, tools).await
             }
             Provider::OpenRouter => {
                 crate::raw::openrouter::complete_openrouter(
