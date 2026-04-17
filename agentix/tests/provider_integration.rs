@@ -158,21 +158,6 @@ mod openai {
     }
 
     #[tokio::test]
-    async fn stream_reasoning() {
-        let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_reasoning.sse"))).await;
-        let events: Vec<_> = req(&url)
-            .user("q")
-            .stream(&http())
-            .await
-            .unwrap()
-            .collect()
-            .await;
-
-        assert_eq!(collect_reasoning(&events), "Let me think about this...");
-        assert_eq!(collect_tokens(&events), "The answer is 42.");
-    }
-
-    #[tokio::test]
     async fn stream_tool_call() {
         let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_tool_call.sse"))).await;
         let events: Vec<_> = req(&url)

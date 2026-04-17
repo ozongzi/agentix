@@ -1,3 +1,4 @@
+pub mod request;
 pub mod response;
 
 use eventsource_stream::Eventsource;
@@ -9,26 +10,11 @@ use crate::error::ApiError;
 use crate::msg::LlmEvent;
 use crate::provider::{PostConfig, post_streaming, post_json};
 use crate::request::{Message, ToolCall, ToolChoice};
-use crate::raw::openai::request::build_oai_request;
-use crate::raw::openai::response::DeltaToolCall;
 use crate::raw::shared::ToolDefinition;
 use crate::types::{CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
 
-use response::StreamChunk;
-
-pub(crate) fn prepare_history(messages: Vec<Message>) -> Vec<Message> {
-    messages.into_iter().map(|m| match m {
-        Message::Assistant { content, reasoning, tool_calls } => {
-            let has_tools = !tool_calls.is_empty();
-            Message::Assistant {
-                content,
-                reasoning: if has_tools { Some(reasoning.unwrap_or_default()) } else { None },
-                tool_calls,
-            }
-        }
-        other => other,
-    }).collect()
-}
+use request::build_deepseek_request;
+use response::{DeltaToolCall, StreamChunk};
 
 pub(crate) fn degrade_json_schema(mut config: AgentConfig) -> AgentConfig {
     use crate::request::ResponseFormat;
@@ -47,9 +33,8 @@ pub(crate) async fn stream_deepseek(
     tools:    &[ToolDefinition],
 ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
     let tool_choice = if tools.is_empty() { None } else { Some(ToolChoice::Auto) };
-    let history = prepare_history(messages.to_vec());
     let config = degrade_json_schema(config.clone());
-    let req = build_oai_request(&config, history, tools, tool_choice, true);
+    let req = build_deepseek_request(&config, messages.to_vec(), tools, tool_choice, true);
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
     let token = token.to_string();
     let resp = post_streaming(http, &url, &req, &token, &PostConfig {
@@ -87,9 +72,8 @@ pub(crate) async fn complete_deepseek(
     tools:    &[ToolDefinition],
 ) -> Result<CompleteResponse, ApiError> {
     let tool_choice = if tools.is_empty() { None } else { Some(ToolChoice::Auto) };
-    let history = prepare_history(messages.to_vec());
     let config = degrade_json_schema(config.clone());
-    let req = build_oai_request(&config, history, tools, tool_choice, false);
+    let req = build_deepseek_request(&config, messages.to_vec(), tools, tool_choice, false);
     let url = format!("{}/chat/completions", config.base_url.trim_end_matches('/'));
     let body = post_json(http, &url, &req, &token, &PostConfig {
         use_query_key:  false,

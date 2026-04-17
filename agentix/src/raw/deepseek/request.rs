@@ -7,7 +7,7 @@ use crate::request::{ImageData, Message, ToolChoice, UserContent};
 #[derive(Debug, Serialize)]
 pub struct Request {
     pub model: String,
-    pub messages: Vec<OaiMessage>,
+    pub messages: Vec<DsMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<crate::raw::shared::ToolDefinition>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -27,7 +27,7 @@ pub struct Request {
 #[derive(Debug, Serialize)]
 #[serde(tag = "role")]
 #[serde(rename_all = "lowercase")]
-pub enum OaiMessage {
+pub enum DsMessage {
     System {
         content: String,
     },
@@ -37,6 +37,8 @@ pub enum OaiMessage {
     Assistant {
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ResponseToolCall>,
     },
@@ -88,31 +90,33 @@ pub struct ResponseFunctionCall {
     pub arguments: String,
 }
 
-pub(crate) fn build_oai_request(
+pub(crate) fn build_deepseek_request(
     config: &AgentConfig,
     history: Vec<Message>,
     tools: &[ToolDefinition],
     tool_choice: Option<ToolChoice>,
     stream: bool,
 ) -> Request {
+    let history = prepare_history(history);
     let mut messages = Vec::new();
     if let Some(s) = &config.system_prompt
         && !s.is_empty()
     {
-        messages.push(OaiMessage::System { content: s.clone() });
+        messages.push(DsMessage::System { content: s.clone() });
     }
     for m in history {
         match m {
-            Message::User(parts) => messages.push(OaiMessage::User {
+            Message::User(parts) => messages.push(DsMessage::User {
                 content: user_content_from_parts(parts),
             }),
             Message::Assistant {
                 content,
+                reasoning,
                 tool_calls,
-                ..
             } => {
-                messages.push(OaiMessage::Assistant {
+                messages.push(DsMessage::Assistant {
                     content,
+                    reasoning_content: reasoning,
                     tool_calls: tool_calls
                         .into_iter()
                         .map(|tc| ResponseToolCall {
@@ -143,7 +147,7 @@ pub(crate) fn build_oai_request(
                     }).collect();
                     ToolMessageContent::Parts(parts)
                 };
-                messages.push(OaiMessage::Tool {
+                messages.push(DsMessage::Tool {
                     tool_call_id: call_id,
                     content: tool_content,
                 });
@@ -174,6 +178,23 @@ pub(crate) fn build_oai_request(
             .map(crate::raw::shared::ResponseFormat::from),
         extra_body: extra,
     }
+}
+
+// DeepSeek-reasoner requires reasoning_content on assistant turns that produced
+// tool calls, and forbids it on turns that didn't. Strip accordingly before
+// serializing history back to the API.
+fn prepare_history(messages: Vec<Message>) -> Vec<Message> {
+    messages.into_iter().map(|m| match m {
+        Message::Assistant { content, reasoning, tool_calls } => {
+            let has_tools = !tool_calls.is_empty();
+            Message::Assistant {
+                content,
+                reasoning: if has_tools { Some(reasoning.unwrap_or_default()) } else { None },
+                tool_calls,
+            }
+        }
+        other => other,
+    }).collect()
 }
 
 fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {

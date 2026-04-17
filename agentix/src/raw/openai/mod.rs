@@ -75,10 +75,6 @@ fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
             events.extend(handle_tool_call_delta(dtc, bufs));
         }
     }
-    if let Some(r) = delta.reasoning_content.filter(|s| !s.is_empty()) {
-        bufs.reasoning_buf.push_str(&r);
-        events.push(LlmEvent::Reasoning(r));
-    }
     if let Some(t) = delta.content.filter(|s| !s.is_empty()) {
         bufs.content_buf.push_str(&t);
         events.push(LlmEvent::Token(t));
@@ -161,7 +157,7 @@ pub(crate) async fn complete_openai_compatible(
 
     Ok(CompleteResponse {
         content: msg.as_ref().and_then(|m| m.content.clone()),
-        reasoning: msg.as_ref().and_then(|m| m.reasoning_content.clone()),
+        reasoning: None,
         tool_calls: msg.map(|m| {
             m.tool_calls.unwrap_or_default().into_iter().map(|tc| ToolCall {
                 id: tc.id,
