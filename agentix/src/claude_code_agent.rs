@@ -207,13 +207,16 @@ pub fn agent_claude_code(
         debug!(?args, "claude-code argv");
 
         // ── Spawn subprocess ─────────────────────────────────────────────
-        let mut child = match Command::new(&binary)
-            .args(&args)
+        // IS_SANDBOX=1 lets claude accept --dangerously-skip-permissions when
+        // running as root (typical inside Docker).
+        let mut cmd = Command::new(&binary);
+        cmd.args(&args)
+            .env("IS_SANDBOX", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
+            .kill_on_drop(true);
+        let mut child = match cmd.spawn()
         {
             Ok(c) => c,
             Err(e) => {
@@ -251,11 +254,14 @@ pub fn agent_claude_code(
         let mut lines = BufReader::new(stdout).lines();
 
         // Drain stderr into a tracing channel so it doesn't fill up.
+        // Log at warn so default `info` filters still surface claude CLI
+        // diagnostics — silent MCP/auth/resume failures have been hard to
+        // diagnose otherwise.
         if let Some(err) = stderr {
             tokio::spawn(async move {
                 let mut elines = BufReader::new(err).lines();
                 while let Ok(Some(l)) = elines.next_line().await {
-                    debug!(target: "claude_code_stderr", "{}", l);
+                    warn!(target: "claude_code_stderr", "{}", l);
                 }
             });
         }
@@ -492,7 +498,7 @@ async fn write_fake_session(
                     blocks.push(serde_json::json!({
                         "type": "tool_use",
                         "id": new_id,
-                        "name": tc.name,
+                        "name": format!("mcp__{}__{}", MCP_SERVER_NAME, tc.name),
                         "input": input,
                     }));
                 }
@@ -501,6 +507,8 @@ async fn write_fake_session(
                     "isSidechain": false,
                     "type": "assistant",
                     "message": {
+                        "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+                        "type": "message",
                         "role": "assistant",
                         "content": blocks,
                     },
@@ -721,23 +729,53 @@ fn translate_stream_json(
         }
 
         // Final `result` marker — stream is done.
+        //
+        // Subtype is authoritative: Claude Code CLI sets `subtype:"success"`
+        // only on clean completion. We've seen payloads in the wild with
+        // `is_error:true` but `subtype:"success"` where the only useful text
+        // was literally the word "success" — which produced the baffling
+        // user-facing "error: success" message. Trust subtype, and warn-log
+        // the raw payload on every non-success so the next real failure in
+        // production surfaces its actual shape.
         "result" => {
-            if v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false) {
+            let subtype = v.get("subtype").and_then(|x| x.as_str()).unwrap_or("");
+            let is_error = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
+            if subtype == "success" && !is_error {
+                out.push(AgentEvent::Done(total_usage.clone()));
+            } else {
+                warn!(payload = %v, "claude-code non-success result");
                 let msg = v
                     .get("errors")
                     .and_then(|e| e.as_array())
                     .and_then(|a| a.first())
-                    .and_then(|x| x.as_str())
-                    .or_else(|| v.get("subtype").and_then(|x| x.as_str()))
-                    .unwrap_or("unknown error")
-                    .to_string();
+                    .and_then(|x| {
+                        x.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                x.get("message")
+                                    .and_then(|m| m.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                    })
+                    .or_else(|| {
+                        v.get("result")
+                            .and_then(|x| x.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| {
+                        if subtype.is_empty() {
+                            "unknown error".to_string()
+                        } else {
+                            subtype.to_string()
+                        }
+                    });
                 out.push(AgentEvent::Error(msg));
-            } else {
-                out.push(AgentEvent::Done(total_usage.clone()));
             }
         }
 
-        _ => {}
+        _ => {
+            debug!(ty = %ty, payload = %v, "unhandled stream-json type");
+        }
     }
     out
 }
