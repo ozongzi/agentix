@@ -128,13 +128,13 @@ let bundle = sqrt + MathTools { precision: 4 };  // compose with +
 
 ```toml
 [dependencies]
-agentix = "0.15"
+agentix = "0.17"
 
 # Optional: Model Context Protocol (MCP) tool support
-# agentix = { version = "0.16", features = ["mcp"] }
+# agentix = { version = "0.17", features = ["mcp"] }
 
 # Optional: drive `claude -p` as the agentic loop using a Claude Max OAuth session
-# agentix = { version = "0.16", features = ["claude-code"] }
+# agentix = { version = "0.17", features = ["claude-code"] }
 ```
 
 ---
