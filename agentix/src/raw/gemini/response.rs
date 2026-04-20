@@ -48,10 +48,10 @@ pub struct UsageMetadata {
 impl From<UsageMetadata> for crate::types::UsageStats {
     fn from(u: UsageMetadata) -> Self {
         Self {
-            prompt_tokens:      u.prompt_token_count as usize,
-            completion_tokens:  u.candidates_token_count as usize,
-            total_tokens:       u.total_token_count as usize,
-            cache_read_tokens:  u.cached_content_token_count as usize,
+            prompt_tokens: u.prompt_token_count as usize,
+            completion_tokens: u.candidates_token_count as usize,
+            total_tokens: u.total_token_count as usize,
+            cache_read_tokens: u.cached_content_token_count as usize,
             ..Default::default()
         }
     }

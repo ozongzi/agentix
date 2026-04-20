@@ -65,7 +65,9 @@ pub(crate) fn split_last_user(
     let mut history = history;
     match history.last() {
         Some(Message::User(_)) => {
-            let Some(Message::User(parts)) = history.pop() else { unreachable!() };
+            let Some(Message::User(parts)) = history.pop() else {
+                unreachable!()
+            };
             Ok((history, user_content_to_json(&parts)))
         }
         Some(Message::ToolResult { .. }) => {
@@ -77,7 +79,9 @@ pub(crate) fn split_last_user(
             let blocks: Vec<serde_json::Value> = tail
                 .into_iter()
                 .map(|m| {
-                    let Message::ToolResult { call_id, content } = m else { unreachable!() };
+                    let Message::ToolResult { call_id, content } = m else {
+                        unreachable!()
+                    };
                     let text = content
                         .iter()
                         .filter_map(|c| {
@@ -120,13 +124,10 @@ pub(crate) fn remap_tool_use_ids(
         let Some(old) = block.get("tool_use_id").and_then(|x| x.as_str()) else {
             continue;
         };
-        if let Some(new) = id_map.get(old) {
-            if let Some(obj) = block.as_object_mut() {
-                obj.insert(
-                    "tool_use_id".into(),
-                    serde_json::Value::String(new.clone()),
-                );
-            }
+        if let Some(new) = id_map.get(old)
+            && let Some(obj) = block.as_object_mut()
+        {
+            obj.insert("tool_use_id".into(), serde_json::Value::String(new.clone()));
         }
     }
 }
@@ -243,10 +244,10 @@ pub(crate) async fn write_fake_session(
                 tool_calls,
             } => {
                 let mut blocks = Vec::new();
-                if let Some(c) = content {
-                    if !c.is_empty() {
-                        blocks.push(serde_json::json!({"type": "text", "text": c}));
-                    }
+                if let Some(c) = content
+                    && !c.is_empty()
+                {
+                    blocks.push(serde_json::json!({"type": "text", "text": c}));
                 }
                 for tc in tool_calls {
                     let new_id = remap(&tc.id);
@@ -379,4 +380,3 @@ pub(crate) fn parse_usage(u: &serde_json::Value) -> UsageStats {
         cache_creation_tokens: cache_creation,
     }
 }
-

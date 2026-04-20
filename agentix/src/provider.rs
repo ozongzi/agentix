@@ -5,28 +5,31 @@ use crate::error::ApiError;
 // ── Shared HTTP POST helper ────────────────────────────────────────────────────
 
 pub(crate) struct PostConfig {
-    pub use_query_key:  bool,
-    pub auth_header:    Option<&'static str>,
-    pub extra_headers:  &'static [(&'static str, &'static str)],
-    pub max_retries:    u32,
+    pub use_query_key: bool,
+    pub auth_header: Option<&'static str>,
+    pub extra_headers: &'static [(&'static str, &'static str)],
+    pub max_retries: u32,
     pub retry_delay_ms: u64,
 }
 
 pub(crate) async fn post_streaming<T: serde::Serialize>(
-    http:   &reqwest::Client,
-    url:    &str,
-    body:   &T,
-    token:  &str,
-    cfg:    &PostConfig,
+    http: &reqwest::Client,
+    url: &str,
+    body: &T,
+    token: &str,
+    cfg: &PostConfig,
 ) -> Result<reqwest::Response, ApiError> {
-    let use_query_key  = cfg.use_query_key;
-    let auth_header    = cfg.auth_header;
-    let extra_headers  = cfg.extra_headers;
-    let max_retries    = cfg.max_retries;
+    let use_query_key = cfg.use_query_key;
+    let auth_header = cfg.auth_header;
+    let extra_headers = cfg.extra_headers;
+    let max_retries = cfg.max_retries;
     let retry_delay_ms = cfg.retry_delay_ms;
     let effective_url = if use_query_key {
-        if url.contains('?') { format!("{}&key={}", url, token) }
-        else                  { format!("{}?key={}", url, token) }
+        if url.contains('?') {
+            format!("{}&key={}", url, token)
+        } else {
+            format!("{}?key={}", url, token)
+        }
     } else {
         url.to_string()
     };
@@ -37,8 +40,12 @@ pub(crate) async fn post_streaming<T: serde::Serialize>(
         let mut builder = http.post(&effective_url);
         if !use_query_key {
             match auth_header {
-                Some(h) => { builder = builder.header(h, token); }
-                None    => { builder = builder.bearer_auth(token); }
+                Some(h) => {
+                    builder = builder.header(h, token);
+                }
+                None => {
+                    builder = builder.bearer_auth(token);
+                }
             }
         }
         for &(name, value) in extra_headers {
@@ -77,11 +84,11 @@ pub(crate) async fn post_streaming<T: serde::Serialize>(
 
 /// Like `post_streaming`, but expects a full JSON response body (non-streaming).
 pub(crate) async fn post_json<T: serde::Serialize>(
-    http:   &reqwest::Client,
-    url:    &str,
-    body:   &T,
-    token:  &str,
-    cfg:    &PostConfig,
+    http: &reqwest::Client,
+    url: &str,
+    body: &T,
+    token: &str,
+    cfg: &PostConfig,
 ) -> Result<String, ApiError> {
     let resp = post_streaming(http, url, body, token, cfg).await?;
     resp.text().await.map_err(ApiError::Network)

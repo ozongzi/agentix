@@ -134,16 +134,23 @@ pub(crate) fn build_kimi_request(
                 let tool_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolMessageContent::Text(text.clone())
                 } else {
-                    let parts = content.iter().filter_map(|p| match p {
-                        Content::Text { text } => Some(ContentPart::Text { text: text.clone() }),
-                        Content::Image(img) => {
-                            let url = match &img.data {
-                                ImageData::Base64(b) => format!("data:{};base64,{}", img.mime_type, b),
-                                ImageData::Url(u) => u.clone(),
-                            };
-                            Some(ContentPart::ImageUrl { image_url: ImageUrl { url, detail: None } })
-                        }
-                    }).collect();
+                    let parts = content
+                        .iter()
+                        .map(|p| match p {
+                            Content::Text { text } => ContentPart::Text { text: text.clone() },
+                            Content::Image(img) => {
+                                let url = match &img.data {
+                                    ImageData::Base64(b) => {
+                                        format!("data:{};base64,{}", img.mime_type, b)
+                                    }
+                                    ImageData::Url(u) => u.clone(),
+                                };
+                                ContentPart::ImageUrl {
+                                    image_url: ImageUrl { url, detail: None },
+                                }
+                            }
+                        })
+                        .collect();
                     ToolMessageContent::Parts(parts)
                 };
                 messages.push(KimiMessage::Tool {

@@ -4,11 +4,11 @@
 //! These live in `tests/` (integration test harness) so the generated code's
 //! `agentix::` paths resolve correctly.
 
-use agentix::{tool, ToolOutput};
 use agentix::tool_trait::Tool;
+use agentix::{ToolOutput, tool};
+use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{Value, json};
-use futures::StreamExt;
 
 // ── Tool definitions ──────────────────────────────────────────────────────────
 

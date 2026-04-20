@@ -26,7 +26,10 @@ pub struct ToolDefinition {
 impl ToolDefinition {
     /// Convenience constructor.
     pub fn function(function: FunctionDefinition) -> Self {
-        Self { kind: ToolKind::Function, function }
+        Self {
+            kind: ToolKind::Function,
+            function,
+        }
     }
 }
 
@@ -97,9 +100,7 @@ pub struct FunctionName {
 pub enum ResponseFormat {
     Text,
     JsonObject,
-    JsonSchema {
-        json_schema: JsonSchemaBody,
-    },
+    JsonSchema { json_schema: JsonSchemaBody },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -114,8 +115,8 @@ pub struct JsonSchemaBody {
 impl From<crate::request::ToolChoice> for ToolChoice {
     fn from(tc: crate::request::ToolChoice) -> Self {
         match tc {
-            crate::request::ToolChoice::Auto     => ToolChoice::String(ToolChoiceMode::Auto),
-            crate::request::ToolChoice::None     => ToolChoice::String(ToolChoiceMode::None),
+            crate::request::ToolChoice::Auto => ToolChoice::String(ToolChoiceMode::Auto),
+            crate::request::ToolChoice::None => ToolChoice::String(ToolChoiceMode::None),
             crate::request::ToolChoice::Required => ToolChoice::String(ToolChoiceMode::Required),
             crate::request::ToolChoice::Tool(name) => ToolChoice::Object(ToolChoiceFunction {
                 kind: ToolKind::Function,
@@ -128,10 +129,19 @@ impl From<crate::request::ToolChoice> for ToolChoice {
 impl From<crate::request::ResponseFormat> for ResponseFormat {
     fn from(f: crate::request::ResponseFormat) -> Self {
         match f {
-            crate::request::ResponseFormat::Text       => ResponseFormat::Text,
+            crate::request::ResponseFormat::Text => ResponseFormat::Text,
             crate::request::ResponseFormat::JsonObject => ResponseFormat::JsonObject,
-            crate::request::ResponseFormat::JsonSchema { name, schema, strict } =>
-                ResponseFormat::JsonSchema { json_schema: JsonSchemaBody { name, schema, strict } },
+            crate::request::ResponseFormat::JsonSchema {
+                name,
+                schema,
+                strict,
+            } => ResponseFormat::JsonSchema {
+                json_schema: JsonSchemaBody {
+                    name,
+                    schema,
+                    strict,
+                },
+            },
         }
     }
 }

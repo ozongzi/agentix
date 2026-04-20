@@ -33,8 +33,7 @@ struct MovieReview {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .expect("Set OPENAI_API_KEY");
+    let api_key = std::env::var("OPENAI_API_KEY").expect("Set OPENAI_API_KEY");
 
     let http = reqwest::Client::new();
 
@@ -55,9 +54,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Rating:  {}/10", review.rating);
     println!("Summary: {}", review.summary);
     println!("\nPros:");
-    for p in &review.pros  { println!("  + {p}"); }
+    for p in &review.pros {
+        println!("  + {p}");
+    }
     println!("\nCons:");
-    for c in &review.cons  { println!("  - {c}"); }
+    for c in &review.cons {
+        println!("  - {c}");
+    }
 
     Ok(())
 }

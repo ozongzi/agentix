@@ -50,9 +50,9 @@ use rmcp::{
     ErrorData as McpError,
     handler::server::ServerHandler,
     model::{
-        CallToolRequestParams, CallToolResult, Content, Implementation,
-        ListToolsResult, PaginatedRequestParams, ProgressNotificationParam,
-        ServerCapabilities, ServerInfo, Tool as McpToolDef,
+        CallToolRequestParams, CallToolResult, Content, Implementation, ListToolsResult,
+        PaginatedRequestParams, ProgressNotificationParam, ServerCapabilities, ServerInfo,
+        Tool as McpToolDef,
     },
     service::{RequestContext, RoleServer, serve_server},
 };
@@ -160,8 +160,8 @@ impl McpServer {
     /// ```
     #[cfg(feature = "mcp-server")]
     pub fn into_axum_router(self) -> axum::Router {
-        use rmcp::transport::{StreamableHttpService, StreamableHttpServerConfig};
         use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+        use rmcp::transport::{StreamableHttpServerConfig, StreamableHttpService};
 
         let name = Arc::new(self.name);
         let version = Arc::new(self.version);
@@ -169,11 +169,8 @@ impl McpServer {
 
         let service = StreamableHttpService::new(
             move || {
-                let handler = McpService::new_shared(
-                    Arc::clone(&tools),
-                    (*name).clone(),
-                    (*version).clone(),
-                );
+                let handler =
+                    McpService::new_shared(Arc::clone(&tools), (*name).clone(), (*version).clone());
                 Ok(handler)
             },
             Arc::new(LocalSessionManager::default()),
@@ -191,7 +188,10 @@ impl McpServer {
     ///
     /// This method blocks until the server is shut down.
     #[cfg(feature = "mcp-server")]
-    pub async fn serve_http(self, addr: impl tokio::net::ToSocketAddrs) -> Result<(), McpServerError> {
+    pub async fn serve_http(
+        self,
+        addr: impl tokio::net::ToSocketAddrs,
+    ) -> Result<(), McpServerError> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
         let local_addr = listener.local_addr()?;
         info!(name = %self.name, version = %self.version, %local_addr, "starting MCP HTTP server");
@@ -221,7 +221,11 @@ impl McpService {
     }
 
     pub fn new_shared(tools: Arc<ToolBundle>, name: String, version: String) -> Self {
-        Self { tools, name, version }
+        Self {
+            tools,
+            name,
+            version,
+        }
     }
 }
 
@@ -254,12 +258,15 @@ impl ServerHandler for McpService {
                     ToolOutput::Progress(msg) => {
                         if let Some(ref token) = progress_token {
                             step += 1.0;
-                            let _ = context.peer.notify_progress(ProgressNotificationParam {
-                                progress_token: token.clone(),
-                                progress: step,
-                                total: None,
-                                message: Some(msg),
-                            }).await;
+                            let _ = context
+                                .peer
+                                .notify_progress(ProgressNotificationParam {
+                                    progress_token: token.clone(),
+                                    progress: step,
+                                    total: None,
+                                    message: Some(msg),
+                                })
+                                .await;
                         }
                     }
                     ToolOutput::Result(v) => {
@@ -278,9 +285,9 @@ impl ServerHandler for McpService {
                             ImageData::Base64(d) => Content::image(d, mime),
                             ImageData::Url(url) => match fetch_image_as_base64(&url).await {
                                 Ok(b64) => Content::image(b64, mime),
-                                Err(e) => Content::text(format!(
-                                    "[image fetch failed: {url} ({e})]"
-                                )),
+                                Err(e) => {
+                                    Content::text(format!("[image fetch failed: {url} ({e})]"))
+                                }
                             },
                         }
                     }
@@ -299,15 +306,17 @@ impl ServerHandler for McpService {
             .tools
             .raw_tools()
             .into_iter()
-            .map(|raw| McpToolDef::new(
-                raw.function.name,
-                raw.function.description.unwrap_or_default(),
-                raw.function
-                    .parameters
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default(),
-            ))
+            .map(|raw| {
+                McpToolDef::new(
+                    raw.function.name,
+                    raw.function.description.unwrap_or_default(),
+                    raw.function
+                        .parameters
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
             .collect();
 
         std::future::ready(Ok(ListToolsResult {

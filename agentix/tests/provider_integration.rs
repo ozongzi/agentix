@@ -7,10 +7,10 @@ use std::time::Duration;
 
 use agentix::msg::LlmEvent;
 use agentix::{Provider, Request};
+use axum::Router;
 use axum::body::Body;
 use axum::extract::State;
 use axum::response::Response;
-use axum::Router;
 use futures::StreamExt;
 use tokio::net::TcpListener;
 
@@ -68,9 +68,7 @@ async fn handle(State(state): State<MockState>) -> Response {
 
 async fn start_mock(behaviour: MockBehaviour) -> String {
     let state = MockState { behaviour };
-    let app = Router::new()
-        .fallback(handle)
-        .with_state(state);
+    let app = Router::new().fallback(handle).with_state(state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -143,12 +141,7 @@ mod openai {
     #[tokio::test]
     async fn stream_text() {
         let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_text.sse"))).await;
-        let events: Vec<_> = req(&url)
-            .stream(&http())
-            .await
-            .unwrap()
-            .collect()
-            .await;
+        let events: Vec<_> = req(&url).stream(&http()).await.unwrap().collect().await;
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
         let u = find_usage(&events).expect("should have usage");
@@ -190,11 +183,7 @@ mod openai {
     #[tokio::test]
     async fn complete_text() {
         let url = start_mock(MockBehaviour::Json(fixture("openai/complete_text.json"))).await;
-        let resp = req(&url)
-            .user("q")
-            .complete(&http())
-            .await
-            .unwrap();
+        let resp = req(&url).user("q").complete(&http()).await.unwrap();
 
         assert_eq!(
             resp.content.as_deref(),
@@ -206,13 +195,11 @@ mod openai {
 
     #[tokio::test]
     async fn complete_tool_call() {
-        let url =
-            start_mock(MockBehaviour::Json(fixture("openai/complete_tool_call.json"))).await;
-        let resp = req(&url)
-            .user("weather?")
-            .complete(&http())
-            .await
-            .unwrap();
+        let url = start_mock(MockBehaviour::Json(fixture(
+            "openai/complete_tool_call.json",
+        )))
+        .await;
+        let resp = req(&url).user("weather?").complete(&http()).await.unwrap();
 
         assert!(resp.content.is_none());
         assert_eq!(resp.tool_calls.len(), 1);
@@ -238,12 +225,7 @@ mod deepseek {
     #[tokio::test]
     async fn stream_text() {
         let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_text.sse"))).await;
-        let events: Vec<_> = req(&url)
-            .stream(&http())
-            .await
-            .unwrap()
-            .collect()
-            .await;
+        let events: Vec<_> = req(&url).stream(&http()).await.unwrap().collect().await;
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
         assert!(matches!(events.last(), Some(LlmEvent::Done)));
@@ -267,11 +249,7 @@ mod deepseek {
     #[tokio::test]
     async fn complete_text() {
         let url = start_mock(MockBehaviour::Json(fixture("openai/complete_text.json"))).await;
-        let resp = req(&url)
-            .user("q")
-            .complete(&http())
-            .await
-            .unwrap();
+        let resp = req(&url).user("q").complete(&http()).await.unwrap();
 
         assert_eq!(
             resp.content.as_deref(),
@@ -297,12 +275,7 @@ mod anthropic {
     #[tokio::test]
     async fn stream_text() {
         let url = start_mock(MockBehaviour::Sse(fixture("anthropic/stream_text.sse"))).await;
-        let events: Vec<_> = req(&url)
-            .stream(&http())
-            .await
-            .unwrap()
-            .collect()
-            .await;
+        let events: Vec<_> = req(&url).stream(&http()).await.unwrap().collect().await;
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
         assert!(matches!(events.last(), Some(LlmEvent::Done)));
@@ -310,8 +283,10 @@ mod anthropic {
 
     #[tokio::test]
     async fn stream_tool_call() {
-        let url =
-            start_mock(MockBehaviour::Sse(fixture("anthropic/stream_tool_call.sse"))).await;
+        let url = start_mock(MockBehaviour::Sse(fixture(
+            "anthropic/stream_tool_call.sse",
+        )))
+        .await;
         let events: Vec<_> = req(&url)
             .user("weather?")
             .stream(&http())
@@ -341,13 +316,8 @@ mod anthropic {
 
     #[tokio::test]
     async fn complete_text() {
-        let url =
-            start_mock(MockBehaviour::Json(fixture("anthropic/complete_text.json"))).await;
-        let resp = req(&url)
-            .user("q")
-            .complete(&http())
-            .await
-            .unwrap();
+        let url = start_mock(MockBehaviour::Json(fixture("anthropic/complete_text.json"))).await;
+        let resp = req(&url).user("q").complete(&http()).await.unwrap();
 
         assert_eq!(
             resp.content.as_deref(),
@@ -359,13 +329,11 @@ mod anthropic {
 
     #[tokio::test]
     async fn complete_tool_call() {
-        let url =
-            start_mock(MockBehaviour::Json(fixture("anthropic/complete_tool_call.json"))).await;
-        let resp = req(&url)
-            .user("weather?")
-            .complete(&http())
-            .await
-            .unwrap();
+        let url = start_mock(MockBehaviour::Json(fixture(
+            "anthropic/complete_tool_call.json",
+        )))
+        .await;
+        let resp = req(&url).user("weather?").complete(&http()).await.unwrap();
 
         assert!(resp.content.is_none());
         assert_eq!(resp.tool_calls.len(), 1);
@@ -391,12 +359,7 @@ mod gemini {
     #[tokio::test]
     async fn stream_text() {
         let url = start_mock(MockBehaviour::Sse(fixture("gemini/stream_text.sse"))).await;
-        let events: Vec<_> = req(&url)
-            .stream(&http())
-            .await
-            .unwrap()
-            .collect()
-            .await;
+        let events: Vec<_> = req(&url).stream(&http()).await.unwrap().collect().await;
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
         let u = find_usage(&events).expect("should have usage");
@@ -407,8 +370,7 @@ mod gemini {
 
     #[tokio::test]
     async fn stream_tool_call() {
-        let url =
-            start_mock(MockBehaviour::Sse(fixture("gemini/stream_tool_call.sse"))).await;
+        let url = start_mock(MockBehaviour::Sse(fixture("gemini/stream_tool_call.sse"))).await;
         let events: Vec<_> = req(&url)
             .user("weather?")
             .stream(&http())
@@ -434,11 +396,7 @@ mod gemini {
     #[tokio::test]
     async fn complete_text() {
         let url = start_mock(MockBehaviour::Json(fixture("gemini/complete_text.json"))).await;
-        let resp = req(&url)
-            .user("q")
-            .complete(&http())
-            .await
-            .unwrap();
+        let resp = req(&url).user("q").complete(&http()).await.unwrap();
 
         assert_eq!(
             resp.content.as_deref(),
@@ -492,7 +450,10 @@ mod edge_cases {
             .await;
         let err = result.err().expect("should be an error");
         let msg = err.to_string();
-        assert!(msg.contains("401") || msg.contains("invalid_api_key"), "got: {msg}");
+        assert!(
+            msg.contains("401") || msg.contains("invalid_api_key"),
+            "got: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -570,7 +531,8 @@ mod edge_cases {
 
     #[tokio::test]
     async fn complete_empty_choices() {
-        let body = r#"{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1}}"#;
+        let body =
+            r#"{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1}}"#;
         let url = start_mock(MockBehaviour::Json(body.into())).await;
 
         let resp = Request::new(Provider::OpenAI, "key")

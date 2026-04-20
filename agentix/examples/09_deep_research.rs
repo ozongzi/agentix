@@ -102,11 +102,15 @@ mod deep_research {
              up-to-date information. Search for the question, read the most relevant pages, \
              then summarize the key findings in 3-5 bullet points. Be factual and concise.",
         );
-        let history = vec![Message::User(vec![UserContent::Text { text: format!(
-            "Research question: {question}\n\nSearch for this and summarize the key findings."
-        ) }])];
+        let history = vec![Message::User(vec![UserContent::Text {
+            text: format!(
+                "Research question: {question}\n\nSearch for this and summarize the key findings."
+            ),
+        }])];
 
-        let result = agent_turns(tools, http, request, history, Some(25_000)).last_content().await;
+        let result = agent_turns(tools, http, request, history, Some(25_000))
+            .last_content()
+            .await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -123,7 +127,10 @@ mod deep_research {
 
         let mut context = String::new();
         for (i, (q, f)) in questions.iter().zip(findings.iter()).enumerate() {
-            context.push_str(&format!("\n## Sub-question {}\n{q}\n\n### Findings\n{f}\n", i + 1));
+            context.push_str(&format!(
+                "\n## Sub-question {}\n{q}\n\n### Findings\n{f}\n",
+                i + 1
+            ));
         }
 
         let request = base.clone().system_prompt(
@@ -131,11 +138,21 @@ mod deep_research {
              identify key themes, connections, contradictions, and gaps. Produce a structured \
              analysis that will serve as the foundation for a final report.",
         );
-        let history = vec![Message::User(vec![UserContent::Text { text: format!(
-            "Synthesize these research findings into a coherent analysis:\n{context}"
-        ) }])];
+        let history = vec![Message::User(vec![UserContent::Text {
+            text: format!(
+                "Synthesize these research findings into a coherent analysis:\n{context}"
+            ),
+        }])];
 
-        let result = agent_turns(ToolBundle::default(), http.clone(), request, history, Some(25_000)).last_content().await;
+        let result = agent_turns(
+            ToolBundle::default(),
+            http.clone(),
+            request,
+            history,
+            Some(25_000),
+        )
+        .last_content()
+        .await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -157,11 +174,13 @@ mod deep_research {
              for each key topic, and a conclusion. Then save it using the save_report tool \
              with filename 'research_report.md'.",
         );
-        let history = vec![Message::User(vec![UserContent::Text { text: format!(
-            "Topic: {topic}\n\nAnalysis to turn into a report:\n{analysis}"
-        ) }])];
+        let history = vec![Message::User(vec![UserContent::Text {
+            text: format!("Topic: {topic}\n\nAnalysis to turn into a report:\n{analysis}"),
+        }])];
 
-        let result = agent_turns(tools, http.clone(), request, history, Some(25_000)).last_content().await;
+        let result = agent_turns(tools, http.clone(), request, history, Some(25_000))
+            .last_content()
+            .await;
         eprintln!("\n╚══════════════════════════════════════════════════════");
         result
     }
@@ -186,10 +205,7 @@ mod deep_research {
                 .await
                 .expect("Failed to start Tavily MCP (is TAVILY_API_KEY set? is npx available?)"),
         );
-        eprintln!(
-            "Tavily MCP ready ({} tools)\n",
-            tavily.raw_tools().len()
-        );
+        eprintln!("Tavily MCP ready ({} tools)\n", tavily.raw_tools().len());
 
         // Stage 1: decompose
         let sub_questions = run_query_agent(&http, &base_request, query).await;
@@ -239,7 +255,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(not(feature = "mcp"))]
 fn main() {
     println!("Run with the `mcp` feature:");
-    println!(
-        "  cargo run --example 09_deep_research --features mcp -- \"your research topic\""
-    );
+    println!("  cargo run --example 09_deep_research --features mcp -- \"your research topic\"");
 }

@@ -83,7 +83,9 @@ async fn start_claude(
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let mcp_addr = listener.local_addr()?;
-    let stub = StubTools { defs: tools.to_vec() };
+    let stub = StubTools {
+        defs: tools.to_vec(),
+    };
     let router = McpServer::new(stub).into_axum_router();
     let mcp_task = tokio::spawn(async move {
         let _ = axum::serve(listener, router).await;
@@ -504,12 +506,9 @@ pub(crate) async fn complete_claude_code(
                                     .to_string();
                                 let raw_name =
                                     block.get("name").and_then(|x| x.as_str()).unwrap_or("");
-                                let input = block
-                                    .get("input")
-                                    .cloned()
-                                    .unwrap_or(serde_json::json!({}));
-                                let arguments =
-                                    serde_json::to_string(&input).unwrap_or_default();
+                                let input =
+                                    block.get("input").cloned().unwrap_or(serde_json::json!({}));
+                                let arguments = serde_json::to_string(&input).unwrap_or_default();
                                 tool_calls.push(ToolCall {
                                     id,
                                     name: strip_mcp_prefix(raw_name),
@@ -536,7 +535,7 @@ pub(crate) async fn complete_claude_code(
             "result" => {
                 let subtype = v.get("subtype").and_then(|x| x.as_str()).unwrap_or("");
                 let is_error = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
-                if !(subtype == "success" && !is_error) {
+                if subtype != "success" || is_error {
                     warn!(payload = %v, "claude-code non-success result");
                     let msg = v
                         .get("result")
@@ -560,9 +559,9 @@ pub(crate) async fn complete_claude_code(
 
     if err.is_none() && !got_terminal {
         err = Some(match child.wait().await {
-            Ok(status) if status.success() => ApiError::Other(
-                "claude exited without emitting assistant or result".into(),
-            ),
+            Ok(status) if status.success() => {
+                ApiError::Other("claude exited without emitting assistant or result".into())
+            }
             Ok(status) => ApiError::Other(format!("claude exited with status {status}")),
             Err(e) => ApiError::Other(format!("wait claude: {e}")),
         });
@@ -575,7 +574,7 @@ pub(crate) async fn complete_claude_code(
         return Err(e);
     }
 
-    let finish_reason = finish_reason.unwrap_or_else(|| {
+    let finish_reason = finish_reason.unwrap_or({
         if tool_calls.is_empty() {
             FinishReason::Stop
         } else {

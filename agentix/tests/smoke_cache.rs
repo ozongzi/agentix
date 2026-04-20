@@ -1,7 +1,7 @@
 //! Live smoke test for prompt-caching changes (requires OPENROUTER_API_KEY).
 
-use agentix::{Provider, Request};
 use agentix::msg::LlmEvent;
+use agentix::{Provider, Request};
 use futures::StreamExt;
 
 #[tokio::test]
@@ -32,6 +32,9 @@ async fn openrouter_live_roundtrip() {
             _ => {}
         }
     }
-    assert!(!text.is_empty(), "should receive non-empty response, got: {text:?}");
+    assert!(
+        !text.is_empty(),
+        "should receive non-empty response, got: {text:?}"
+    );
     eprintln!("live response: {text}");
 }

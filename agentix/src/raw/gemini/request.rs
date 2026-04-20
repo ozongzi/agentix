@@ -43,10 +43,18 @@ impl serde::Serialize for Part {
         use serde::ser::SerializeMap;
         let mut map = s.serialize_map(None)?;
         match self {
-            Part::Text(t)             => { map.serialize_entry("text", t)?; }
-            Part::InlineData(b)       => { map.serialize_entry("inline_data", b)?; }
-            Part::FunctionCall(fc)    => { map.serialize_entry("function_call", fc)?; }
-            Part::FunctionResponse(fr) => { map.serialize_entry("function_response", fr)?; }
+            Part::Text(t) => {
+                map.serialize_entry("text", t)?;
+            }
+            Part::InlineData(b) => {
+                map.serialize_entry("inline_data", b)?;
+            }
+            Part::FunctionCall(fc) => {
+                map.serialize_entry("function_call", fc)?;
+            }
+            Part::FunctionResponse(fr) => {
+                map.serialize_entry("function_response", fr)?;
+            }
         }
         map.end()
     }
@@ -115,9 +123,13 @@ pub(crate) fn build_gemini_request(
     messages: &[Message],
     tools: &[ToolDefinition],
 ) -> Request {
-    let system_instruction = config.system_prompt.as_ref()
+    let system_instruction = config
+        .system_prompt
+        .as_ref()
         .filter(|s| !s.is_empty())
-        .map(|s| SystemInstruction { parts: vec![Part::Text(s.clone())] });
+        .map(|s| SystemInstruction {
+            parts: vec![Part::Text(s.clone())],
+        });
 
     let mut contents: Vec<Content> = Vec::new();
     let mut pending_fn_responses: Vec<Part> = Vec::new();
@@ -133,35 +145,57 @@ pub(crate) fn build_gemini_request(
                 }
                 contents.push(Content {
                     role: "user",
-                    parts: parts.iter().map(|p| match p {
-                        UserContent::Text { text: t } => Part::Text(t.clone()),
-                        UserContent::Image(img) => Part::InlineData(Blob {
-                            mime_type: img.mime_type.clone(),
-                            data: match &img.data {
-                                ImageData::Base64(b) => b.clone(),
-                                ImageData::Url(u)    => u.clone(),
-                            },
-                        }),
-                    }).collect(),
+                    parts: parts
+                        .iter()
+                        .map(|p| match p {
+                            UserContent::Text { text: t } => Part::Text(t.clone()),
+                            UserContent::Image(img) => Part::InlineData(Blob {
+                                mime_type: img.mime_type.clone(),
+                                data: match &img.data {
+                                    ImageData::Base64(b) => b.clone(),
+                                    ImageData::Url(u) => u.clone(),
+                                },
+                            }),
+                        })
+                        .collect(),
                 });
             }
-            Message::Assistant { content, tool_calls, .. } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+                ..
+            } => {
                 let mut parts: Vec<Part> = Vec::new();
-                if let Some(t) = content && !t.is_empty() {
+                if let Some(t) = content
+                    && !t.is_empty()
+                {
                     parts.push(Part::Text(t.clone()));
                 }
                 for tc in tool_calls {
                     let args = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                    parts.push(Part::FunctionCall(FunctionCall { name: tc.name.clone(), args }));
+                    parts.push(Part::FunctionCall(FunctionCall {
+                        name: tc.name.clone(),
+                        args,
+                    }));
                 }
                 if !parts.is_empty() {
-                    contents.push(Content { role: "model", parts });
+                    contents.push(Content {
+                        role: "model",
+                        parts,
+                    });
                 }
             }
             Message::ToolResult { call_id, content } => {
                 use crate::request::Content;
-                let text = content.iter()
-                    .filter_map(|p| if let Content::Text { text } = p { Some(text.as_str()) } else { None })
+                let text = content
+                    .iter()
+                    .filter_map(|p| {
+                        if let Content::Text { text } = p {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 pending_fn_responses.push(Part::FunctionResponse(FunctionResponse {
@@ -185,18 +219,24 @@ pub(crate) fn build_gemini_request(
         }
     }
     if !pending_fn_responses.is_empty() {
-        contents.push(Content { role: "user", parts: pending_fn_responses });
+        contents.push(Content {
+            role: "user",
+            parts: pending_fn_responses,
+        });
     }
 
     let gemini_tools = if tools.is_empty() {
         None
     } else {
         Some(vec![GeminiTools {
-            function_declarations: tools.iter().map(|t| FunctionDeclaration {
-                name: t.function.name.clone(),
-                description: t.function.description.clone(),
-                parameters: sanitize_schema_for_gemini(t.function.parameters.clone()),
-            }).collect(),
+            function_declarations: tools
+                .iter()
+                .map(|t| FunctionDeclaration {
+                    name: t.function.name.clone(),
+                    description: t.function.description.clone(),
+                    parameters: sanitize_schema_for_gemini(t.function.parameters.clone()),
+                })
+                .collect(),
         }])
     };
 
@@ -212,26 +252,35 @@ pub(crate) fn build_gemini_request(
     };
 
     let (response_mime_type, response_schema) = match &config.response_format {
-        Some(crate::request::ResponseFormat::JsonObject) =>
-            (Some("application/json"), None),
-        Some(crate::request::ResponseFormat::JsonSchema { schema, .. }) =>
-            (Some("application/json"), Some(schema.clone())),
+        Some(crate::request::ResponseFormat::JsonObject) => (Some("application/json"), None),
+        Some(crate::request::ResponseFormat::JsonSchema { schema, .. }) => {
+            (Some("application/json"), Some(schema.clone()))
+        }
         _ => (None, None),
     };
     let gc = GenerationConfig {
-        temperature:        config.temperature,
-        max_output_tokens:  config.max_tokens,
+        temperature: config.temperature,
+        max_output_tokens: config.max_tokens,
         response_mime_type,
         response_schema,
     };
-    let generation_config = if gc.temperature.is_none() && gc.max_output_tokens.is_none()
-        && gc.response_mime_type.is_none() && gc.response_schema.is_none() {
+    let generation_config = if gc.temperature.is_none()
+        && gc.max_output_tokens.is_none()
+        && gc.response_mime_type.is_none()
+        && gc.response_schema.is_none()
+    {
         None
     } else {
         Some(gc)
     };
 
-    Request { contents, system_instruction, tools: gemini_tools, tool_config, generation_config }
+    Request {
+        contents,
+        system_instruction,
+        tools: gemini_tools,
+        tool_config,
+        generation_config,
+    }
 }
 
 fn sanitize_schema_for_gemini(v: Value) -> Value {
@@ -239,7 +288,8 @@ fn sanitize_schema_for_gemini(v: Value) -> Value {
         Value::Object(mut map) => {
             // type: ["string", "null"] -> 取第一个非 null 值
             if let Some(Value::Array(types)) = map.get("type") {
-                let first_non_null = types.iter()
+                let first_non_null = types
+                    .iter()
                     .find(|t| t.as_str() != Some("null"))
                     .cloned()
                     .unwrap_or(Value::String("string".into()));
@@ -251,7 +301,8 @@ fn sanitize_schema_for_gemini(v: Value) -> Value {
             }
             // 递归处理 properties
             if let Some(Value::Object(props)) = map.remove("properties") {
-                let new_props: serde_json::Map<String, Value> = props.into_iter()
+                let new_props: serde_json::Map<String, Value> = props
+                    .into_iter()
                     .map(|(k, v)| (k, sanitize_schema_for_gemini(v)))
                     .collect();
                 map.insert("properties".into(), Value::Object(new_props));

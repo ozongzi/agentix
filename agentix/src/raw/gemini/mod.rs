@@ -8,19 +8,21 @@ use tracing::debug;
 use crate::config::AgentConfig;
 use crate::error::ApiError;
 use crate::msg::LlmEvent;
-use crate::provider::{PostConfig, post_streaming, post_json};
-use crate::request::{Message, ToolCall};
+use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::request::{Message, ToolCall};
+use crate::types::{
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+};
 
 use response::Response;
 
 pub(crate) async fn stream_gemini(
-    token:    &str,
-    http:     &reqwest::Client,
-    config:   &AgentConfig,
+    token: &str,
+    http: &reqwest::Client,
+    config: &AgentConfig,
     messages: &[Message],
-    tools:    &[ToolDefinition],
+    tools: &[ToolDefinition],
 ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
     let req = request::build_gemini_request(config, messages, tools);
     let url = format!(
@@ -29,13 +31,20 @@ pub(crate) async fn stream_gemini(
         config.model,
     );
 
-    let resp = post_streaming(http, &url, &req, token, &PostConfig {
-        use_query_key:  true,
-        auth_header:    None,
-        extra_headers:  &[],
-        max_retries:    config.max_retries,
-        retry_delay_ms: config.retry_delay_ms,
-    }).await?;
+    let resp = post_streaming(
+        http,
+        &url,
+        &req,
+        token,
+        &PostConfig {
+            use_query_key: true,
+            auth_header: None,
+            extra_headers: &[],
+            max_retries: config.max_retries,
+            retry_delay_ms: config.retry_delay_ms,
+        },
+    )
+    .await?;
 
     Ok(async_stream::stream! {
         let mut bufs = StreamBufs::new();
@@ -53,15 +62,16 @@ pub(crate) async fn stream_gemini(
         }
         for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
         yield LlmEvent::Done;
-    }.boxed())
+    }
+    .boxed())
 }
 
 pub(crate) async fn complete_gemini(
-    token:    &str,
-    http:     &reqwest::Client,
-    config:   &AgentConfig,
+    token: &str,
+    http: &reqwest::Client,
+    config: &AgentConfig,
     messages: &[Message],
-    tools:    &[ToolDefinition],
+    tools: &[ToolDefinition],
 ) -> Result<CompleteResponse, ApiError> {
     let req = request::build_gemini_request(config, messages, tools);
     let url = format!(
@@ -70,22 +80,34 @@ pub(crate) async fn complete_gemini(
         config.model,
     );
 
-    let body = post_json(http, &url, &req, token, &PostConfig {
-        use_query_key:  true,
-        auth_header:    None,
-        extra_headers:  &[],
-        max_retries:    config.max_retries,
-        retry_delay_ms: config.retry_delay_ms,
-    }).await?;
+    let body = post_json(
+        http,
+        &url,
+        &req,
+        token,
+        &PostConfig {
+            use_query_key: true,
+            auth_header: None,
+            extra_headers: &[],
+            max_retries: config.max_retries,
+            retry_delay_ms: config.retry_delay_ms,
+        },
+    )
+    .await?;
 
-    let raw: Response = serde_json::from_str(&body)
-        .map_err(ApiError::Json)?;
+    let raw: Response = serde_json::from_str(&body).map_err(ApiError::Json)?;
 
     let mut content_buf = String::new();
     let mut tool_calls = Vec::new();
     let mut finish_reason = None;
 
-    if let Some(candidate) = raw.candidates.and_then(|mut c| if c.is_empty() { None } else { Some(c.remove(0)) }) {
+    if let Some(candidate) = raw.candidates.and_then(|mut c| {
+        if c.is_empty() {
+            None
+        } else {
+            Some(c.remove(0))
+        }
+    }) {
         finish_reason = candidate.finish_reason.as_deref().map(FinishReason::from);
         for part in candidate.content.parts {
             if let Some(t) = part.text.filter(|s| !s.is_empty()) {
@@ -102,7 +124,11 @@ pub(crate) async fn complete_gemini(
     }
 
     Ok(CompleteResponse {
-        content: if content_buf.is_empty() { None } else { Some(content_buf) },
+        content: if content_buf.is_empty() {
+            None
+        } else {
+            Some(content_buf)
+        },
         reasoning: None,
         tool_calls,
         usage: raw.usage_metadata.map(UsageStats::from).unwrap_or_default(),
@@ -115,9 +141,15 @@ fn parse_chunk(chunk: Response, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
     if let Some(u) = chunk.usage_metadata {
         events.push(LlmEvent::Usage(UsageStats::from(u)));
     }
-    let candidate = match chunk.candidates.and_then(|mut c| if c.is_empty() { None } else { Some(c.remove(0)) }) {
+    let candidate = match chunk.candidates.and_then(|mut c| {
+        if c.is_empty() {
+            None
+        } else {
+            Some(c.remove(0))
+        }
+    }) {
         Some(c) => c,
-        None    => return events,
+        None => return events,
     };
     for part in candidate.content.parts {
         if let Some(t) = part.text.filter(|s| !s.is_empty()) {
@@ -128,13 +160,21 @@ fn parse_chunk(chunk: Response, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
             let idx = bufs.tool_call_bufs.len();
             let args = serde_json::to_string(&fc.args).unwrap_or_default();
             events.push(LlmEvent::ToolCallChunk(ToolCallChunk {
-                id: fc.name.clone(), name: fc.name.clone(), delta: String::new(), index: idx as u32,
+                id: fc.name.clone(),
+                name: fc.name.clone(),
+                delta: String::new(),
+                index: idx as u32,
             }));
             events.push(LlmEvent::ToolCallChunk(ToolCallChunk {
-                id: fc.name.clone(), name: fc.name.clone(), delta: args.clone(), index: idx as u32,
+                id: fc.name.clone(),
+                name: fc.name.clone(),
+                delta: args.clone(),
+                index: idx as u32,
             }));
             bufs.tool_call_bufs.push(Some(PartialToolCall {
-                id: fc.name.clone(), name: fc.name, arguments: args,
+                id: fc.name.clone(),
+                name: fc.name,
+                arguments: args,
             }));
         }
     }
@@ -142,7 +182,13 @@ fn parse_chunk(chunk: Response, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
 }
 
 fn finalize(bufs: &mut StreamBufs) -> Vec<ToolCall> {
-    bufs.tool_call_bufs.drain(..).flatten().map(|p| ToolCall {
-        id: p.id, name: p.name, arguments: p.arguments,
-    }).collect()
+    bufs.tool_call_bufs
+        .drain(..)
+        .flatten()
+        .map(|p| ToolCall {
+            id: p.id,
+            name: p.name,
+            arguments: p.arguments,
+        })
+        .collect()
 }

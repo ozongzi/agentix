@@ -56,7 +56,6 @@ impl FinishReason {
     }
 }
 
-
 impl From<&str> for FinishReason {
     fn from(s: &str) -> Self {
         match s {
@@ -64,7 +63,9 @@ impl From<&str> for FinishReason {
             "stop" | "STOP" => FinishReason::Stop,
             "length" | "MAX_TOKENS" => FinishReason::Length,
             "tool_calls" | "MALFORMED_FUNCTION_CALL" => FinishReason::ToolCalls,
-            "content_filter" | "SAFETY" | "PROHIBITED_CONTENT" | "SPII" | "BLOCKLIST" => FinishReason::ContentFilter,
+            "content_filter" | "SAFETY" | "PROHIBITED_CONTENT" | "SPII" | "BLOCKLIST" => {
+                FinishReason::ContentFilter
+            }
             // Anthropic
             "end_turn" => FinishReason::Stop,
             "max_tokens" => FinishReason::Length,
@@ -153,4 +154,3 @@ impl Default for StreamBufs {
         Self::new()
     }
 }
-

@@ -58,10 +58,11 @@ pub struct Usage {
 impl From<Usage> for crate::types::UsageStats {
     fn from(u: Usage) -> Self {
         Self {
-            prompt_tokens:     u.prompt_tokens as usize,
+            prompt_tokens: u.prompt_tokens as usize,
             completion_tokens: u.completion_tokens as usize,
-            total_tokens:      u.total_tokens as usize,
-            cache_read_tokens: u.prompt_tokens_details
+            total_tokens: u.total_tokens as usize,
+            cache_read_tokens: u
+                .prompt_tokens_details
                 .map(|d| d.cached_tokens as usize)
                 .unwrap_or(0),
             ..Default::default()

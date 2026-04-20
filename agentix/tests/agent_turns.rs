@@ -16,7 +16,10 @@ fn resp(content: &str) -> CompleteResponse {
 }
 
 fn resp_no_content() -> CompleteResponse {
-    CompleteResponse { content: None, ..Default::default() }
+    CompleteResponse {
+        content: None,
+        ..Default::default()
+    }
 }
 
 fn mock_err() -> ApiError {
@@ -129,11 +132,7 @@ async fn last_content_skips_errors_takes_last_ok() {
 
 #[tokio::test]
 async fn agent_turns_stream_can_be_driven_manually() {
-    let mut s = AgentTurnsStream::from_items(vec![
-        Ok(resp("a")),
-        Err(mock_err()),
-        Ok(resp("b")),
-    ]);
+    let mut s = AgentTurnsStream::from_items(vec![Ok(resp("a")), Err(mock_err()), Ok(resp("b"))]);
     let mut results = vec![];
     while let Some(item) = s.next().await {
         results.push(item.is_ok());

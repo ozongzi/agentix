@@ -11,9 +11,17 @@ pub struct Response {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseBlock {
-    Text     { text: String },
-    ToolUse  { id: String, name: String, input: Value },
-    Thinking { thinking: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    Thinking {
+        thinking: String,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,11 +37,11 @@ pub struct Usage {
 impl From<Usage> for crate::types::UsageStats {
     fn from(u: Usage) -> Self {
         Self {
-            prompt_tokens:          u.input_tokens as usize,
-            completion_tokens:      u.output_tokens as usize,
-            total_tokens:          (u.input_tokens + u.output_tokens) as usize,
-            cache_read_tokens:      u.cache_read_input_tokens as usize,
-            cache_creation_tokens:  u.cache_creation_input_tokens as usize,
+            prompt_tokens: u.input_tokens as usize,
+            completion_tokens: u.output_tokens as usize,
+            total_tokens: (u.input_tokens + u.output_tokens) as usize,
+            cache_read_tokens: u.cache_read_input_tokens as usize,
+            cache_creation_tokens: u.cache_creation_input_tokens as usize,
         }
     }
 }
@@ -41,13 +49,28 @@ impl From<Usage> for crate::types::UsageStats {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
-    MessageStart      { message: MessageStart },
-    ContentBlockStart { index: u32, content_block: ContentBlockStart },
-    ContentBlockDelta { index: u32, delta: ContentBlockDelta },
-    ContentBlockStop  { index: u32 },
-    MessageDelta      { delta: MessageDelta, usage: Option<Usage> },
+    MessageStart {
+        message: MessageStart,
+    },
+    ContentBlockStart {
+        index: u32,
+        content_block: ContentBlockStart,
+    },
+    ContentBlockDelta {
+        index: u32,
+        delta: ContentBlockDelta,
+    },
+    ContentBlockStop {
+        index: u32,
+    },
+    MessageDelta {
+        delta: MessageDelta,
+        usage: Option<Usage>,
+    },
     MessageStop,
-    Error             { error: StreamError },
+    Error {
+        error: StreamError,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -60,7 +83,7 @@ pub struct MessageStart {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlockStart {
-    Text    { text: String },
+    Text { text: String },
     ToolUse { id: String, name: String },
     Thinking { thinking: String },
 }
@@ -68,9 +91,9 @@ pub enum ContentBlockStart {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlockDelta {
-    TextDelta      { text: String },
+    TextDelta { text: String },
     InputJsonDelta { partial_json: String },
-    ThinkingDelta  { thinking: String },
+    ThinkingDelta { thinking: String },
 }
 
 #[derive(Debug, Deserialize)]

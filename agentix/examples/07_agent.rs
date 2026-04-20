@@ -53,14 +53,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Request::openai(k)
     } else {
         panic!("Set DEEPSEEK_API_KEY or OPENAI_API_KEY");
-    }.system_prompt("You are a math assistant. Use your tools to compute exact results.");
+    }
+    .system_prompt("You are a math assistant. Use your tools to compute exact results.");
 
     let http = reqwest::Client::new();
     let tools = ToolBundle::default() + Calculator;
 
-    let history = vec![
-        Message::User(vec![UserContent::Text { text: "What is (123 + 456) * 789 / 3?".into() }]),
-    ];
+    let history = vec![Message::User(vec![UserContent::Text {
+        text: "What is (123 + 456) * 789 / 3?".into(),
+    }])];
 
     println!("Question: (123 + 456) * 789 / 3\n");
 
@@ -76,10 +77,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolProgress { name, progress, .. } => {
                 println!("  [{name}] {progress}");
             }
-            AgentEvent::ToolResult { name, ref content, .. } => {
-                let text = content.iter()
-                    .filter_map(|p| if let agentix::Content::Text { text } = p { Some(text.as_str()) } else { None })
-                    .collect::<Vec<_>>().join(" ");
+            AgentEvent::ToolResult {
+                name, ref content, ..
+            } => {
+                let text = content
+                    .iter()
+                    .filter_map(|p| {
+                        if let agentix::Content::Text { text } = p {
+                            Some(text.as_str())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 println!("← [{name}] = {text}");
             }
             AgentEvent::Usage(u) => {

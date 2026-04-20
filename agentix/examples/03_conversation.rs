@@ -75,7 +75,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }));
 
                     // Add a default text prompt alongside the image
-                    user_parts.push(UserContent::Text { text: "Please describe this image.".to_string() });
+                    user_parts.push(UserContent::Text {
+                        text: "Please describe this image.".to_string(),
+                    });
                     println!("(Attached local image: {path})");
                 }
                 Err(e) => {
@@ -85,7 +87,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         } else {
             // Normal text message
-            user_parts.push(UserContent::Text { text: input.to_string() });
+            user_parts.push(UserContent::Text {
+                text: input.to_string(),
+            });
         }
 
         // Add the user's message to the history

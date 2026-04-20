@@ -1,8 +1,8 @@
 //! Compile-time verification of every code example in README.md.
 //! Each test mirrors a README snippet to ensure the documented API is real.
 
-use agentix::{Request, Provider, LlmEvent, Message, UserContent};
 use agentix::request::ToolCall;
+use agentix::{LlmEvent, Message, Provider, Request, UserContent};
 
 // ── Quick Start (simplified, no network) ──────────────────────────────────────
 
@@ -63,9 +63,9 @@ fn builder_methods() {
         .retries(5, 2000)
         .user("Hello!")
         .message(msg)
-        .messages(vec![
-            Message::User(vec![UserContent::Text { text: "test".into() }]),
-        ])
+        .messages(vec![Message::User(vec![UserContent::Text {
+            text: "test".into(),
+        }])])
         .tools(vec![]);
 
     assert_eq!(req.model, "deepseek-reasoner");

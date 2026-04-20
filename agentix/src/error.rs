@@ -1,5 +1,5 @@
-use thiserror::Error;
 use reqwest::StatusCode;
+use thiserror::Error;
 
 /// Common `Result` alias used throughout the crate.
 pub type Result<T> = std::result::Result<T, ApiError>;
@@ -9,10 +9,7 @@ pub type Result<T> = std::result::Result<T, ApiError>;
 pub enum ApiError {
     /// HTTP-level failure from the provider.
     #[error("HTTP {status}: {text}")]
-    Http {
-        status: StatusCode,
-        text: String,
-    },
+    Http { status: StatusCode, text: String },
 
     /// Business-level error returned by the LLM provider (e.g., policy violation, insufficient balance).
     #[error("LLM Provider error: {0}")]

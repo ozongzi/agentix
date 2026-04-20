@@ -8,29 +8,38 @@ use tracing::debug;
 use crate::config::AgentConfig;
 use crate::error::ApiError;
 use crate::msg::LlmEvent;
-use crate::provider::{PostConfig, post_streaming, post_json};
-use crate::request::{Message, ToolCall};
+use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
-use crate::types::{CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats};
+use crate::request::{Message, ToolCall};
+use crate::types::{
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+};
 
 use response::{ContentBlockDelta, ContentBlockStart, ResponseBlock, StreamEvent};
 
 pub(crate) async fn stream_anthropic(
-    token:    &str,
-    http:     &reqwest::Client,
-    config:   &AgentConfig,
+    token: &str,
+    http: &reqwest::Client,
+    config: &AgentConfig,
     messages: &[Message],
-    tools:    &[ToolDefinition],
+    tools: &[ToolDefinition],
 ) -> Result<BoxStream<'static, LlmEvent>, ApiError> {
     let req = request::build_anthropic_request(config, messages, tools, true);
     let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
-    let resp = post_streaming(http, &url, &req, token, &PostConfig {
-        use_query_key:  false,
-        auth_header:    Some("x-api-key"),
-        extra_headers:  &[("anthropic-version", "2023-06-01")],
-        max_retries:    config.max_retries,
-        retry_delay_ms: config.retry_delay_ms,
-    }).await?;
+    let resp = post_streaming(
+        http,
+        &url,
+        &req,
+        token,
+        &PostConfig {
+            use_query_key: false,
+            auth_header: Some("x-api-key"),
+            extra_headers: &[("anthropic-version", "2023-06-01")],
+            max_retries: config.max_retries,
+            retry_delay_ms: config.retry_delay_ms,
+        },
+    )
+    .await?;
 
     Ok(async_stream::stream! {
         let mut bufs = StreamBufs::new();
@@ -55,28 +64,35 @@ pub(crate) async fn stream_anthropic(
 
         for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
         yield LlmEvent::Done;
-    }.boxed())
+    }
+    .boxed())
 }
 
 pub(crate) async fn complete_anthropic(
-    token:    &str,
-    http:     &reqwest::Client,
-    config:   &AgentConfig,
+    token: &str,
+    http: &reqwest::Client,
+    config: &AgentConfig,
     messages: &[Message],
-    tools:    &[ToolDefinition],
+    tools: &[ToolDefinition],
 ) -> Result<CompleteResponse, ApiError> {
     let req = request::build_anthropic_request(config, messages, tools, false);
     let url = format!("{}/v1/messages", config.base_url.trim_end_matches('/'));
-    let body = post_json(http, &url, &req, token, &PostConfig {
-        use_query_key:  false,
-        auth_header:    Some("x-api-key"),
-        extra_headers:  &[("anthropic-version", "2023-06-01")],
-        max_retries:    config.max_retries,
-        retry_delay_ms: config.retry_delay_ms,
-    }).await?;
+    let body = post_json(
+        http,
+        &url,
+        &req,
+        token,
+        &PostConfig {
+            use_query_key: false,
+            auth_header: Some("x-api-key"),
+            extra_headers: &[("anthropic-version", "2023-06-01")],
+            max_retries: config.max_retries,
+            retry_delay_ms: config.retry_delay_ms,
+        },
+    )
+    .await?;
 
-    let raw: response::Response = serde_json::from_str(&body)
-        .map_err(ApiError::Json)?;
+    let raw: response::Response = serde_json::from_str(&body).map_err(ApiError::Json)?;
 
     let mut content_buf = String::new();
     let mut reasoning_buf = String::new();
@@ -97,11 +113,23 @@ pub(crate) async fn complete_anthropic(
     }
 
     Ok(CompleteResponse {
-        content: if content_buf.is_empty() { None } else { Some(content_buf) },
-        reasoning: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf) },
+        content: if content_buf.is_empty() {
+            None
+        } else {
+            Some(content_buf)
+        },
+        reasoning: if reasoning_buf.is_empty() {
+            None
+        } else {
+            Some(reasoning_buf)
+        },
         tool_calls,
         usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
-        finish_reason: raw.stop_reason.as_deref().map(FinishReason::from).unwrap_or_default(),
+        finish_reason: raw
+            .stop_reason
+            .as_deref()
+            .map(FinishReason::from)
+            .unwrap_or_default(),
     })
 }
 
@@ -119,7 +147,10 @@ fn parse_stream_event(ev: StreamEvent, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
             }
             vec![]
         }
-        StreamEvent::ContentBlockStart { index, content_block } => {
+        StreamEvent::ContentBlockStart {
+            index,
+            content_block,
+        } => {
             let idx = index as usize;
             if bufs.tool_call_bufs.len() <= idx {
                 bufs.tool_call_bufs.resize_with(idx + 1, || None);
@@ -127,10 +158,15 @@ fn parse_stream_event(ev: StreamEvent, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
             match content_block {
                 ContentBlockStart::ToolUse { id, name } => {
                     bufs.tool_call_bufs[idx] = Some(PartialToolCall {
-                        id: id.clone(), name: name.clone(), arguments: String::new(),
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: String::new(),
                     });
                     vec![LlmEvent::ToolCallChunk(ToolCallChunk {
-                        id, name, delta: String::new(), index,
+                        id,
+                        name,
+                        delta: String::new(),
+                        index,
                     })]
                 }
                 ContentBlockStart::Text { text } if !text.is_empty() => {
@@ -158,10 +194,14 @@ fn parse_stream_event(ev: StreamEvent, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
                 if let Some(Some(partial)) = bufs.tool_call_bufs.get_mut(idx) {
                     partial.arguments.push_str(&partial_json);
                     vec![LlmEvent::ToolCallChunk(ToolCallChunk {
-                        id: partial.id.clone(), name: partial.name.clone(),
-                        delta: partial_json, index,
+                        id: partial.id.clone(),
+                        name: partial.name.clone(),
+                        delta: partial_json,
+                        index,
                     })]
-                } else { vec![] }
+                } else {
+                    vec![]
+                }
             }
             _ => vec![],
         },
@@ -170,7 +210,13 @@ fn parse_stream_event(ev: StreamEvent, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
 }
 
 fn finalize(bufs: &mut StreamBufs) -> Vec<ToolCall> {
-    bufs.tool_call_bufs.drain(..).flatten().map(|p| ToolCall {
-        id: p.id, name: p.name, arguments: p.arguments,
-    }).collect()
+    bufs.tool_call_bufs
+        .drain(..)
+        .flatten()
+        .map(|p| ToolCall {
+            id: p.id,
+            name: p.name,
+            arguments: p.arguments,
+        })
+        .collect()
 }

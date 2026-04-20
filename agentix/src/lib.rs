@@ -42,34 +42,33 @@ pub mod request;
 pub mod tool_trait;
 pub mod types;
 
+pub mod agent;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 #[cfg(feature = "mcp-server")]
 pub mod mcp_server;
-pub mod agent;
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+pub use agent::{AgentEvent, AgentTurnsStream, agent, agent_turns};
 pub use error::ApiError;
 pub use msg::LlmEvent;
 pub use raw::shared::ToolDefinition;
 pub use request::{
-    Content, ImageContent, ImageData, Message, Provider, Request, ResponseFormat,
-    ToolCall, ToolChoice, UserContent, truncate_to_token_budget,
+    Content, ImageContent, ImageData, Message, Provider, Request, ResponseFormat, ToolCall,
+    ToolChoice, UserContent, truncate_to_token_budget,
 };
-pub use types::{CompleteResponse, FinishReason, UsageStats};
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
-pub use agent::{AgentEvent, AgentTurnsStream, agent, agent_turns};
+pub use types::{CompleteResponse, FinishReason, UsageStats};
 
 pub use agentix_macros::tool;
+pub use async_trait;
+pub use futures;
 pub use schemars;
 pub use serde;
 pub use serde_json;
-pub use async_trait;
-pub use futures;
 
 #[cfg(feature = "mcp")]
 pub use mcp::McpTool;
 #[cfg(feature = "mcp-server")]
 pub use mcp_server::{McpServer, McpServerError, McpService};
-

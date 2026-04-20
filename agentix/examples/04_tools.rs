@@ -1,4 +1,4 @@
-use agentix::{LlmEvent, Request, tool, Tool};
+use agentix::{LlmEvent, Request, Tool, tool};
 use futures::StreamExt;
 use std::env;
 
@@ -33,7 +33,11 @@ impl agentix::Tool for Calculator {
     /// a: dividend
     /// b: divisor
     async fn divide(&self, a: f64, b: f64) -> Result<f64, String> {
-        if b == 0.0 { Err("division by zero".into()) } else { Ok(a / b) }
+        if b == 0.0 {
+            Err("division by zero".into())
+        } else {
+            Ok(a / b)
+        }
     }
 }
 

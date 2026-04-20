@@ -63,9 +63,17 @@ fn parse_doc(lines: &[String]) -> (String, std::collections::HashMap<String, Str
 /// Returns true if `ty` is `serde_json::Value` or plain `Value`.
 fn is_json_value(ty: &Type) -> bool {
     let Type::Path(tp) = ty else { return false };
-    let segs: Vec<String> = tp.path.segments.iter().map(|s| s.ident.to_string()).collect();
+    let segs: Vec<String> = tp
+        .path
+        .segments
+        .iter()
+        .map(|s| s.ident.to_string())
+        .collect();
     matches!(
-        segs.iter().map(|s| s.as_str()).collect::<Vec<_>>().as_slice(),
+        segs.iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .as_slice(),
         ["Value"] | ["serde_json", "Value"] | ["serde_json", "value", "Value"]
     )
 }
@@ -73,10 +81,18 @@ fn is_json_value(ty: &Type) -> bool {
 /// Returns true if `ty` is `Vec<serde_json::Value>` or `Vec<Value>`.
 fn is_untyped_vec(ty: &Type) -> bool {
     let Type::Path(tp) = ty else { return false };
-    let Some(last) = tp.path.segments.last() else { return false };
-    if last.ident != "Vec" { return false }
-    let syn::PathArguments::AngleBracketed(ref args) = last.arguments else { return false };
-    let Some(syn::GenericArgument::Type(inner)) = args.args.first() else { return false };
+    let Some(last) = tp.path.segments.last() else {
+        return false;
+    };
+    if last.ident != "Vec" {
+        return false;
+    }
+    let syn::PathArguments::AngleBracketed(ref args) = last.arguments else {
+        return false;
+    };
+    let Some(syn::GenericArgument::Type(inner)) = args.args.first() else {
+        return false;
+    };
     is_json_value(inner)
 }
 
@@ -122,18 +138,18 @@ fn strip_not_for_openai_attr(attrs: &mut Vec<syn::Attribute>) {
 }
 
 struct ToolMethod {
-    tool_name:   String,
+    tool_name: String,
     description: String,
-    params:      Vec<ParamInfo>,
-    body:        syn::Block,
-    output:      syn::ReturnType,
-    streaming:   bool,
+    params: Vec<ParamInfo>,
+    body: syn::Block,
+    output: syn::ReturnType,
+    streaming: bool,
 }
 
 struct ParamInfo {
-    name:     String,
-    ty:       Type,
-    desc:     String,
+    name: String,
+    ty: Type,
+    desc: String,
     optional: bool,
 }
 
@@ -192,7 +208,12 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 // ── Generators ────────────────────────────────────────────────────────────────
 
-fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool, skip_openai_check: bool) -> TokenStream {
+fn tool_from_fn(
+    attr: TokenStream,
+    item_fn: ItemFn,
+    is_streaming: bool,
+    skip_openai_check: bool,
+) -> TokenStream {
     let fn_name = item_fn.sig.ident.to_string();
     let struct_ident = item_fn.sig.ident.clone();
 
@@ -228,7 +249,12 @@ fn tool_from_fn(attr: TokenStream, item_fn: ItemFn, is_streaming: bool, skip_ope
             }
             let desc = param_docs.get(&name).cloned().unwrap_or_default();
             let optional = is_option(&ty);
-            params.push(ParamInfo { name, ty, desc, optional });
+            params.push(ParamInfo {
+                name,
+                ty,
+                desc,
+                optional,
+            });
         }
     }
 
@@ -327,7 +353,12 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                     let desc = param_docs.get(&name).cloned().unwrap_or_default();
                     let optional = is_option(&ty);
-                    params.push(ParamInfo { name, ty, desc, optional });
+                    params.push(ParamInfo {
+                        name,
+                        ty,
+                        desc,
+                        optional,
+                    });
                 }
             }
             tool_methods.push(ToolMethod {

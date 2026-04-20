@@ -198,21 +198,22 @@ pub fn truncate_to_token_budget(history: &mut Vec<Message>, budget: usize) {
     // otherwise those ToolResults would become orphaned after the drain.
     if keep_from < history.len()
         && let Message::Assistant { tool_calls, .. } = &history[keep_from]
-            && !tool_calls.is_empty() {
-                // Collect the tool_call ids that belong to this assistant turn.
-                let ids: std::collections::HashSet<&str> =
-                    tool_calls.iter().map(|tc| tc.id.as_str()).collect();
-                keep_from += 1;
-                // Skip all consecutive ToolResult messages that belong to this group.
-                while keep_from < history.len() {
-                    match &history[keep_from] {
-                        Message::ToolResult { call_id, .. } if ids.contains(call_id.as_str()) => {
-                            keep_from += 1;
-                        }
-                        _ => break,
-                    }
+        && !tool_calls.is_empty()
+    {
+        // Collect the tool_call ids that belong to this assistant turn.
+        let ids: std::collections::HashSet<&str> =
+            tool_calls.iter().map(|tc| tc.id.as_str()).collect();
+        keep_from += 1;
+        // Skip all consecutive ToolResult messages that belong to this group.
+        while keep_from < history.len() {
+            match &history[keep_from] {
+                Message::ToolResult { call_id, .. } if ids.contains(call_id.as_str()) => {
+                    keep_from += 1;
                 }
+                _ => break,
             }
+        }
+    }
 
     // Safety: always keep at least one message.
     if keep_from >= history.len() {
@@ -583,9 +584,8 @@ impl Request {
 
         match self.provider {
             Provider::DeepSeek => {
-                crate::raw::deepseek::stream_deepseek(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                crate::raw::deepseek::stream_deepseek(&self.api_key, http, &config, messages, tools)
+                    .await
             }
             Provider::OpenAI => {
                 use crate::raw::openai::stream_openai_compatible;
@@ -657,8 +657,13 @@ impl Request {
         match self.provider {
             Provider::DeepSeek => {
                 crate::raw::deepseek::complete_deepseek(
-                    &self.api_key, http, &config, messages, tools,
-                ).await
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
             }
             Provider::OpenAI => {
                 use crate::raw::openai::complete_openai_compatible;
@@ -723,7 +728,7 @@ impl Request {
     }
 
     /// Convert to the legacy `AgentConfig` for internal provider use.
-
+    ///
     /// This is a temporary bridge until providers are fully migrated.
     fn to_agent_config(&self) -> crate::config::AgentConfig {
         crate::config::AgentConfig {
@@ -739,7 +744,6 @@ impl Request {
         }
     }
 }
-
 
 #[cfg(test)]
 mod truncate_tests {

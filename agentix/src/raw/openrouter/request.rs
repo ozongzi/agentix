@@ -83,7 +83,9 @@ pub struct CacheControl {
 
 impl CacheControl {
     fn ephemeral() -> Self {
-        CacheControl { r#type: "ephemeral".to_string() }
+        CacheControl {
+            r#type: "ephemeral".to_string(),
+        }
     }
 }
 
@@ -152,16 +154,27 @@ pub(crate) fn build_openrouter_request(
                 let tool_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolMessageContent::Text(text.clone())
                 } else {
-                    let parts = content.iter().filter_map(|p| match p {
-                        Content::Text { text } => Some(ContentPart::Text { text: text.clone(), cache_control: None }),
-                        Content::Image(img) => {
-                            let url = match &img.data {
-                                ImageData::Base64(b) => format!("data:{};base64,{}", img.mime_type, b),
-                                ImageData::Url(u) => u.clone(),
-                            };
-                            Some(ContentPart::ImageUrl { image_url: ImageUrl { url, detail: None }, cache_control: None })
-                        }
-                    }).collect();
+                    let parts = content
+                        .iter()
+                        .map(|p| match p {
+                            Content::Text { text } => ContentPart::Text {
+                                text: text.clone(),
+                                cache_control: None,
+                            },
+                            Content::Image(img) => {
+                                let url = match &img.data {
+                                    ImageData::Base64(b) => {
+                                        format!("data:{};base64,{}", img.mime_type, b)
+                                    }
+                                    ImageData::Url(u) => u.clone(),
+                                };
+                                ContentPart::ImageUrl {
+                                    image_url: ImageUrl { url, detail: None },
+                                    cache_control: None,
+                                }
+                            }
+                        })
+                        .collect();
                     ToolMessageContent::Parts(parts)
                 };
                 messages.push(OaiMessage::Tool {
@@ -228,7 +241,7 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
 }
 
 // Stamp cache_control: ephemeral on system prompt, first user message (summary), and last user message (latest turn).
-fn stamp_cache_breakpoints(messages: &mut Vec<OaiMessage>) {
+fn stamp_cache_breakpoints(messages: &mut [OaiMessage]) {
     let mut first_user: Option<usize> = None;
     let mut last_user: Option<usize> = None;
 
@@ -247,10 +260,10 @@ fn stamp_cache_breakpoints(messages: &mut Vec<OaiMessage>) {
         if let OaiMessage::User { content } = &mut messages[f] {
             stamp_cache(content);
         }
-        if let Some(l) = last_user.filter(|&l| l != f) {
-            if let OaiMessage::User { content } = &mut messages[l] {
-                stamp_cache(content);
-            }
+        if let Some(l) = last_user.filter(|&l| l != f)
+            && let OaiMessage::User { content } = &mut messages[l]
+        {
+            stamp_cache(content);
         }
     }
 }
@@ -273,8 +286,7 @@ fn stamp_cache(content: &mut MessageContent) {
 
 fn set_cache_control(part: &mut ContentPart) {
     match part {
-        ContentPart::Text { cache_control, .. }
-        | ContentPart::ImageUrl { cache_control, .. } => {
+        ContentPart::Text { cache_control, .. } | ContentPart::ImageUrl { cache_control, .. } => {
             *cache_control = Some(CacheControl::ephemeral());
         }
     }

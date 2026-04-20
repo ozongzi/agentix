@@ -34,18 +34,15 @@ impl agentix::Tool for Calculator {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
     let http = reqwest::Client::new();
-    let base = Request::claude_code()
-        .model("sonnet")
-        .system_prompt(
-            "You are a concise math assistant. You MUST call the add/multiply \
+    let base = Request::claude_code().model("sonnet").system_prompt(
+        "You are a concise math assistant. You MUST call the add/multiply \
              tools for every arithmetic operation — never compute in your head.",
-        );
+    );
     let history = vec![Message::User(vec![UserContent::Text {
         text: "What is (123 + 456) * 789? Use your tools.".into(),
     }])];
@@ -60,7 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             AgentEvent::ToolCallStart(tc) => {
                 println!("\n→ {}({})", tc.name, tc.arguments);
             }
-            AgentEvent::ToolResult { name, ref content, .. } => {
+            AgentEvent::ToolResult {
+                name, ref content, ..
+            } => {
                 let text = content
                     .iter()
                     .filter_map(|p| {

@@ -19,4 +19,7 @@ pub mod openai;
 pub mod openrouter;
 pub mod shared;
 
-pub use shared::{FunctionDefinition, FunctionName, JsonSchemaBody, ResponseFormat, ToolChoice, ToolChoiceFunction, ToolChoiceMode, ToolDefinition, ToolKind};
+pub use shared::{
+    FunctionDefinition, FunctionName, JsonSchemaBody, ResponseFormat, ToolChoice,
+    ToolChoiceFunction, ToolChoiceMode, ToolDefinition, ToolKind,
+};

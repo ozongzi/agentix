@@ -156,7 +156,6 @@ const DEFAULT_MAX_OUTPUT_CHARS: usize = 8_000;
 /// Default maximum content items
 const DEFAULT_MAX_CONTENT_ITEMS: usize = 50;
 
-
 impl McpTool {
     // ── Constructors ──────────────────────────────────────────────────────────
 
@@ -378,15 +377,23 @@ impl Tool for McpTool {
     fn raw_tools(&self) -> Vec<RawTool> {
         match &self.name {
             None => self.tools.clone(),
-            Some(prefix) => self.tools.iter().map(|t| {
-                let mut t = t.clone();
-                t.function.name = format!("{}__{}", prefix, t.function.name);
-                t
-            }).collect(),
+            Some(prefix) => self
+                .tools
+                .iter()
+                .map(|t| {
+                    let mut t = t.clone();
+                    t.function.name = format!("{}__{}", prefix, t.function.name);
+                    t
+                })
+                .collect(),
         }
     }
 
-    async fn call(&self, name: &str, args: Value) -> futures::stream::BoxStream<'static, crate::tool_trait::ToolOutput> {
+    async fn call(
+        &self,
+        name: &str,
+        args: Value,
+    ) -> futures::stream::BoxStream<'static, crate::tool_trait::ToolOutput> {
         let real_name = match &self.name {
             Some(prefix) => {
                 let pfx = format!("{}__", prefix);
@@ -438,11 +445,10 @@ impl Tool for McpTool {
                         .filter_map(|item| serde_json::to_value(item).ok())
                         .collect();
 
-                    if let Some(max_items) = max_content_items {
-                        if contents.len() > max_items {
+                    if let Some(max_items) = max_content_items
+                        && contents.len() > max_items {
                             contents.truncate(max_items);
                         }
-                    }
 
                     // Emit each content item except the last as Progress so callers
                     // can stream intermediate output; the final item is the Result.

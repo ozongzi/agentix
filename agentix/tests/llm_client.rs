@@ -159,17 +159,32 @@ mod provider_enum {
 
     #[test]
     fn default_base_urls() {
-        assert_eq!(Provider::DeepSeek.default_base_url(), "https://api.deepseek.com");
-        assert_eq!(Provider::OpenAI.default_base_url(), "https://api.openai.com/v1");
-        assert_eq!(Provider::Anthropic.default_base_url(), "https://api.anthropic.com");
-        assert_eq!(Provider::Gemini.default_base_url(), "https://generativelanguage.googleapis.com/v1beta");
+        assert_eq!(
+            Provider::DeepSeek.default_base_url(),
+            "https://api.deepseek.com"
+        );
+        assert_eq!(
+            Provider::OpenAI.default_base_url(),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            Provider::Anthropic.default_base_url(),
+            "https://api.anthropic.com"
+        );
+        assert_eq!(
+            Provider::Gemini.default_base_url(),
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
     }
 
     #[test]
     fn default_models() {
         assert_eq!(Provider::DeepSeek.default_model(), "deepseek-chat");
         assert_eq!(Provider::OpenAI.default_model(), "gpt-4o");
-        assert_eq!(Provider::Anthropic.default_model(), "claude-sonnet-4-20250514");
+        assert_eq!(
+            Provider::Anthropic.default_model(),
+            "claude-sonnet-4-20250514"
+        );
         assert_eq!(Provider::Gemini.default_model(), "gemini-2.0-flash");
     }
 

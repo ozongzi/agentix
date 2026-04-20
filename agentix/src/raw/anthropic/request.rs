@@ -128,11 +128,11 @@ pub enum ToolChoice {
 fn merge_consecutive_user(messages: &[Message]) -> Vec<Message> {
     let mut out: Vec<Message> = Vec::with_capacity(messages.len());
     for msg in messages {
-        if let Message::User(parts) = msg {
-            if let Some(Message::User(prev)) = out.last_mut() {
-                prev.extend(parts.iter().cloned());
-                continue;
-            }
+        if let Message::User(parts) = msg
+            && let Some(Message::User(prev)) = out.last_mut()
+        {
+            prev.extend(parts.iter().cloned());
+            continue;
         }
         out.push(msg.clone());
     }
@@ -163,7 +163,11 @@ pub(crate) fn build_anthropic_request(
                     content: user_content_from_parts(parts.clone()),
                 });
             }
-            Message::Assistant { content, tool_calls, .. } => {
+            Message::Assistant {
+                content,
+                tool_calls,
+                ..
+            } => {
                 if !pending_tool_results.is_empty() {
                     out_messages.push(RequestMessage {
                         role: "user",
@@ -177,12 +181,21 @@ pub(crate) fn build_anthropic_request(
                     });
                 } else {
                     let mut blocks: Vec<ContentBlock> = Vec::new();
-                    if let Some(t) = content && !t.is_empty() {
-                        blocks.push(ContentBlock::Text { text: t.clone(), cache_control: None });
+                    if let Some(t) = content
+                        && !t.is_empty()
+                    {
+                        blocks.push(ContentBlock::Text {
+                            text: t.clone(),
+                            cache_control: None,
+                        });
                     }
                     for tc in tool_calls {
                         let input = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                        blocks.push(ContentBlock::ToolUse { id: tc.id.clone(), name: tc.name.clone(), input });
+                        blocks.push(ContentBlock::ToolUse {
+                            id: tc.id.clone(),
+                            name: tc.name.clone(),
+                            input,
+                        });
                     }
                     out_messages.push(RequestMessage {
                         role: "assistant",
@@ -195,19 +208,22 @@ pub(crate) fn build_anthropic_request(
                 let wire_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolResultContent::Text(text.clone())
                 } else {
-                    let parts = content.iter().filter_map(|p| match p {
-                        Content::Text { text } => Some(ToolResultPart::Text { text: text.clone() }),
-                        Content::Image(img) => {
-                            let source = match &img.data {
-                                ImageData::Base64(data) => ImageSource::Base64 {
-                                    media_type: img.mime_type.clone(),
-                                    data: data.clone(),
-                                },
-                                ImageData::Url(url) => ImageSource::Url { url: url.clone() },
-                            };
-                            Some(ToolResultPart::Image { source })
-                        }
-                    }).collect();
+                    let parts = content
+                        .iter()
+                        .map(|p| match p {
+                            Content::Text { text } => ToolResultPart::Text { text: text.clone() },
+                            Content::Image(img) => {
+                                let source = match &img.data {
+                                    ImageData::Base64(data) => ImageSource::Base64 {
+                                        media_type: img.mime_type.clone(),
+                                        data: data.clone(),
+                                    },
+                                    ImageData::Url(url) => ImageSource::Url { url: url.clone() },
+                                };
+                                ToolResultPart::Image { source }
+                            }
+                        })
+                        .collect();
                     ToolResultContent::Parts(parts)
                 };
                 pending_tool_results.push(ContentBlock::ToolResult {
@@ -229,11 +245,16 @@ pub(crate) fn build_anthropic_request(
     let anthropic_tools: Option<Vec<Tool>> = if tools.is_empty() {
         None
     } else {
-        Some(tools.iter().map(|t| Tool {
-            name: t.function.name.clone(),
-            description: t.function.description.clone(),
-            input_schema: t.function.parameters.clone(),
-        }).collect())
+        Some(
+            tools
+                .iter()
+                .map(|t| Tool {
+                    name: t.function.name.clone(),
+                    description: t.function.description.clone(),
+                    input_schema: t.function.parameters.clone(),
+                })
+                .collect(),
+        )
     };
 
     let tool_choice = if tools.is_empty() {
@@ -243,13 +264,17 @@ pub(crate) fn build_anthropic_request(
     };
 
     // System prompt as blocks so we can attach cache_control.
-    let system = config.system_prompt.as_deref().filter(|s| !s.is_empty()).map(|s| {
-        vec![SystemBlock {
-            kind: "text",
-            text: s.to_string(),
-            cache_control: Some(CacheControl::ephemeral()),
-        }]
-    });
+    let system = config
+        .system_prompt
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            vec![SystemBlock {
+                kind: "text",
+                text: s.to_string(),
+                cache_control: Some(CacheControl::ephemeral()),
+            }]
+        });
 
     Request {
         model: config.model.clone(),
@@ -272,17 +297,29 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
     }
     let has_text = parts.iter().any(|p| matches!(p, UserContent::Text { .. }));
     let has_image = parts.iter().any(|p| matches!(p, UserContent::Image(_)));
-    let mut blocks: Vec<ContentBlock> = parts.into_iter().map(|p| match p {
-        UserContent::Text { text: t } => ContentBlock::Text { text: t, cache_control: None },
-        UserContent::Image(img) => ContentBlock::Image {
-            source: match img.data {
-                ImageData::Base64(data) => ImageSource::Base64 { media_type: img.mime_type, data },
-                ImageData::Url(url)     => ImageSource::Url { url },
+    let mut blocks: Vec<ContentBlock> = parts
+        .into_iter()
+        .map(|p| match p {
+            UserContent::Text { text: t } => ContentBlock::Text {
+                text: t,
+                cache_control: None,
             },
-        },
-    }).collect();
+            UserContent::Image(img) => ContentBlock::Image {
+                source: match img.data {
+                    ImageData::Base64(data) => ImageSource::Base64 {
+                        media_type: img.mime_type,
+                        data,
+                    },
+                    ImageData::Url(url) => ImageSource::Url { url },
+                },
+            },
+        })
+        .collect();
     if has_image && !has_text {
-        blocks.push(ContentBlock::Text { text: " ".to_string(), cache_control: None });
+        blocks.push(ContentBlock::Text {
+            text: " ".to_string(),
+            cache_control: None,
+        });
     }
     MessageContent::Blocks(blocks)
 }
@@ -295,7 +332,7 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
 //
 // System prompt already gets cache_control in build_anthropic_request above.
 
-fn stamp_cache_breakpoints(messages: &mut Vec<RequestMessage>) {
+fn stamp_cache_breakpoints(messages: &mut [RequestMessage]) {
     let mut first_user: Option<usize> = None;
     let mut last_user: Option<usize> = None;
 
@@ -324,10 +361,13 @@ fn stamp_cache(content: &mut MessageContent) {
         }
         MessageContent::Blocks(blocks) => {
             // Stamp on the last text block (skip ToolUse/ToolResult/Image).
-            if let Some(block) = blocks.iter_mut().rev().find(|b| matches!(b, ContentBlock::Text { .. })) {
-                if let ContentBlock::Text { cache_control, .. } = block {
-                    *cache_control = Some(CacheControl::ephemeral());
-                }
+            if let Some(block) = blocks
+                .iter_mut()
+                .rev()
+                .find(|b| matches!(b, ContentBlock::Text { .. }))
+                && let ContentBlock::Text { cache_control, .. } = block
+            {
+                *cache_control = Some(CacheControl::ephemeral());
             }
         }
     }
@@ -362,10 +402,17 @@ mod tests {
         let msgs = vec![Message::User(vec![Content::text("Hello")])];
         let req = build_anthropic_request(&cfg("S"), &msgs, &[], false);
         let json = serde_json::to_value(&req).unwrap();
-        let user = json["messages"].as_array().unwrap()
-            .iter().find(|m| m["role"] == "user").unwrap().clone();
+        let user = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap()
+            .clone();
         // After stamping, content becomes an array.
-        let blocks = user["content"].as_array().expect("must be blocks after stamp");
+        let blocks = user["content"]
+            .as_array()
+            .expect("must be blocks after stamp");
         let text_block = blocks.iter().find(|b| b["type"] == "text").unwrap();
         assert_eq!(text_block["cache_control"]["type"], "ephemeral");
     }
@@ -374,7 +421,11 @@ mod tests {
     fn multi_turn_first_and_last_stamped() {
         let msgs = vec![
             Message::User(vec![Content::text("First")]),
-            Message::Assistant { content: Some("A".into()), reasoning: None, tool_calls: vec![] },
+            Message::Assistant {
+                content: Some("A".into()),
+                reasoning: None,
+                tool_calls: vec![],
+            },
             Message::User(vec![Content::text("Second")]),
         ];
         let req = build_anthropic_request(&cfg("S"), &msgs, &[], false);
@@ -387,16 +438,24 @@ mod tests {
         for u in &users {
             let blocks = u["content"].as_array().expect("must be blocks");
             let text = blocks.iter().find(|b| b["type"] == "text").unwrap();
-            assert_eq!(text["cache_control"]["type"], "ephemeral",
-                "both user messages must be stamped");
+            assert_eq!(
+                text["cache_control"]["type"], "ephemeral",
+                "both user messages must be stamped"
+            );
         }
     }
 
     #[test]
     fn no_system_prompt_no_system_field() {
-        let config = AgentConfig { model: "m".into(), ..Default::default() };
+        let config = AgentConfig {
+            model: "m".into(),
+            ..Default::default()
+        };
         let req = build_anthropic_request(&config, &[], &[], false);
         let json = serde_json::to_value(&req).unwrap();
-        assert!(json["system"].is_null(), "absent system prompt must not serialize");
+        assert!(
+            json["system"].is_null(),
+            "absent system prompt must not serialize"
+        );
     }
 }

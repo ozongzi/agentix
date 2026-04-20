@@ -135,16 +135,23 @@ pub(crate) fn build_deepseek_request(
                 let tool_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolMessageContent::Text(text.clone())
                 } else {
-                    let parts = content.iter().filter_map(|p| match p {
-                        Content::Text { text } => Some(ContentPart::Text { text: text.clone() }),
-                        Content::Image(img) => {
-                            let url = match &img.data {
-                                ImageData::Base64(b) => format!("data:{};base64,{}", img.mime_type, b),
-                                ImageData::Url(u) => u.clone(),
-                            };
-                            Some(ContentPart::ImageUrl { image_url: ImageUrl { url, detail: None } })
-                        }
-                    }).collect();
+                    let parts = content
+                        .iter()
+                        .map(|p| match p {
+                            Content::Text { text } => ContentPart::Text { text: text.clone() },
+                            Content::Image(img) => {
+                                let url = match &img.data {
+                                    ImageData::Base64(b) => {
+                                        format!("data:{};base64,{}", img.mime_type, b)
+                                    }
+                                    ImageData::Url(u) => u.clone(),
+                                };
+                                ContentPart::ImageUrl {
+                                    image_url: ImageUrl { url, detail: None },
+                                }
+                            }
+                        })
+                        .collect();
                     ToolMessageContent::Parts(parts)
                 };
                 messages.push(DsMessage::Tool {
@@ -184,17 +191,28 @@ pub(crate) fn build_deepseek_request(
 // tool calls, and forbids it on turns that didn't. Strip accordingly before
 // serializing history back to the API.
 fn prepare_history(messages: Vec<Message>) -> Vec<Message> {
-    messages.into_iter().map(|m| match m {
-        Message::Assistant { content, reasoning, tool_calls } => {
-            let has_tools = !tool_calls.is_empty();
+    messages
+        .into_iter()
+        .map(|m| match m {
             Message::Assistant {
                 content,
-                reasoning: if has_tools { Some(reasoning.unwrap_or_default()) } else { None },
+                reasoning,
                 tool_calls,
+            } => {
+                let has_tools = !tool_calls.is_empty();
+                Message::Assistant {
+                    content,
+                    reasoning: if has_tools {
+                        Some(reasoning.unwrap_or_default())
+                    } else {
+                        None
+                    },
+                    tool_calls,
+                }
             }
-        }
-        other => other,
-    }).collect()
+            other => other,
+        })
+        .collect()
 }
 
 fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {
