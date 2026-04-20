@@ -1,15 +1,14 @@
-//! Example 10: `claude -p` as the agentic loop (Claude Max OAuth)
+//! Example 10: Claude Code (Max OAuth) via `Provider::ClaudeCode`
 //!
-//! Drives the `claude` CLI in headless mode so tool calls dispatch back to
-//! in-process agentix [`Tool`]s via a loopback MCP server. Uses the user's
-//! Claude Max subscription — no API key needed.
+//! Drives `claude -p` as a single-turn LLM through the standard `agent()`
+//! loop. Tool calls dispatch locally through agentix's `Tool` trait — the
+//! loopback MCP server only surfaces tool schemas. Uses the user's Claude
+//! Max subscription; no API key needed.
 //!
 //! Run with:
 //!   cargo run --example 10_claude_code --features claude-code
 
-use agentix::{
-    AgentEvent, ClaudeCodeConfig, Message, ToolBundle, UserContent, agent_claude_code, tool,
-};
+use agentix::{AgentEvent, Message, Request, UserContent, agent, tool};
 use futures::StreamExt;
 
 struct Calculator;
@@ -40,21 +39,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let tools = ToolBundle::default() + Calculator;
-
+    let http = reqwest::Client::new();
+    let base = Request::claude_code()
+        .model("sonnet")
+        .system_prompt(
+            "You are a concise math assistant. You MUST call the add/multiply \
+             tools for every arithmetic operation — never compute in your head.",
+        );
     let history = vec![Message::User(vec![UserContent::Text {
         text: "What is (123 + 456) * 789? Use your tools.".into(),
     }])];
 
-    println!("Question: (123 + 456) * 789 — use tools\n");
+    println!("Q: (123 + 456) * 789\n");
 
-    let mut stream = agent_claude_code(
-        tools,
-        "You are a concise math assistant. Always use the provided tools for arithmetic; never compute in your head.",
-        ClaudeCodeConfig::new(),
-        history,
-    );
-
+    let mut stream = agent(Calculator, http, base, history, None);
     while let Some(event) = stream.next().await {
         match event {
             AgentEvent::Token(t) => print!("{t}"),
@@ -76,13 +74,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .join(" ");
                 println!("← [{name}] = {text}");
             }
-            AgentEvent::Usage(u) => {
-                eprintln!("\n[tokens: {}]", u.total_tokens);
-            }
+            AgentEvent::Usage(u) => eprintln!("\n[tokens: {}]", u.total_tokens),
             AgentEvent::Done(total) => {
                 eprintln!("\n[total tokens: {}]", total.total_tokens);
+                break;
             }
-            AgentEvent::Warning(w) => eprintln!("\n[warn] {w}"),
             AgentEvent::Error(e) => {
                 eprintln!("\n[error] {e}");
                 break;
@@ -90,7 +86,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
     }
-
     println!();
     Ok(())
 }

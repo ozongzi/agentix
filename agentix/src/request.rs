@@ -266,6 +266,11 @@ pub enum Provider {
     /// OpenRouter (API gateway with prompt caching support)
     #[serde(rename = "openrouter")]
     OpenRouter,
+    /// Claude Code CLI — rides Max OAuth via the local `claude` binary.
+    /// The `api_key` field is ignored; auth comes from the CLI's keychain.
+    #[cfg(feature = "claude-code")]
+    #[serde(rename = "claude-code")]
+    ClaudeCode,
 }
 
 impl Provider {
@@ -281,6 +286,8 @@ impl Provider {
             Provider::Minimax => "https://api.minimaxi.com/anthropic",
             Provider::Grok => "https://api.x.ai/v1",
             Provider::OpenRouter => "https://openrouter.ai/api/v1",
+            #[cfg(feature = "claude-code")]
+            Provider::ClaudeCode => "",
         }
     }
 
@@ -296,6 +303,8 @@ impl Provider {
             Provider::Minimax => "MiniMax-M2.7",
             Provider::Grok => "grok-4",
             Provider::OpenRouter => "openrouter/auto",
+            #[cfg(feature = "claude-code")]
+            Provider::ClaudeCode => "sonnet",
         }
     }
 }
@@ -435,6 +444,14 @@ impl Request {
     /// Shortcut for `Request::new(Provider::OpenRouter, api_key)`.
     pub fn openrouter(api_key: impl Into<String>) -> Self {
         Self::new(Provider::OpenRouter, api_key)
+    }
+
+    /// Shortcut for `Request::new(Provider::ClaudeCode, "")`.
+    ///
+    /// No API key is required — auth is delegated to the local `claude` CLI.
+    #[cfg(feature = "claude-code")]
+    pub fn claude_code() -> Self {
+        Self::new(Provider::ClaudeCode, String::new())
     }
 
     // ── Builder setters (all consume & return Self) ──────────────────────
@@ -617,6 +634,17 @@ impl Request {
                 )
                 .await
             }
+            #[cfg(feature = "claude-code")]
+            Provider::ClaudeCode => {
+                crate::raw::claude_code::stream_claude_code(
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
+            }
         }
     }
 
@@ -672,6 +700,17 @@ impl Request {
             }
             Provider::OpenRouter => {
                 crate::raw::openrouter::complete_openrouter(
+                    &self.api_key,
+                    http,
+                    &config,
+                    messages,
+                    tools,
+                )
+                .await
+            }
+            #[cfg(feature = "claude-code")]
+            Provider::ClaudeCode => {
+                crate::raw::claude_code::complete_claude_code(
                     &self.api_key,
                     http,
                     &config,

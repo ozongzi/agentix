@@ -8,6 +8,8 @@
 //! Most users should interact through [`Request`](crate::Request) and never
 //! need to touch these types directly.
 pub mod anthropic;
+#[cfg(feature = "claude-code")]
+pub mod claude_code;
 pub mod deepseek;
 pub mod gemini;
 pub mod glm;

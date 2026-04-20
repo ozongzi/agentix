@@ -48,9 +48,6 @@ pub mod mcp;
 pub mod mcp_server;
 pub mod agent;
 
-#[cfg(feature = "claude-code")]
-pub mod claude_code_agent;
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub use error::ApiError;
@@ -76,5 +73,3 @@ pub use mcp::McpTool;
 #[cfg(feature = "mcp-server")]
 pub use mcp_server::{McpServer, McpServerError, McpService};
 
-#[cfg(feature = "claude-code")]
-pub use claude_code_agent::{ClaudeCodeConfig, agent_claude_code};

@@ -441,20 +441,21 @@ async fn main() {
 
 ## Claude Code (Max OAuth)
 
-`agent_claude_code()` drives the `claude` CLI in headless mode (`claude -p`) as
-the agentic loop, so you can ride an existing **Claude Max** subscription instead
-of paying per-token via `ANTHROPIC_API_KEY`. The CLI's OAuth session is read
-from the OS keychain; your agentix `Tool`s are exposed back to it through an
-in-process loopback MCP server.
+`Provider::ClaudeCode` is a regular provider backed by `claude -p`, so you can
+ride an existing **Claude Max** subscription instead of paying per-token via
+`ANTHROPIC_API_KEY`. It plugs into `agent()` like any other provider — agentix
+owns the loop, tool calls dispatch locally through the `Tool` trait, and the
+loopback MCP server only surfaces tool schemas. Auth comes from the CLI's
+OAuth session in the OS keychain.
 
 Requires the `claude-code` feature and the [`claude` CLI] installed + logged in.
 
 ```toml
-agentix = { version = "0.16", features = ["claude-code"] }
+agentix = { version = "0.17", features = ["claude-code"] }
 ```
 
 ```rust
-use agentix::{AgentEvent, ClaudeCodeConfig, Message, ToolBundle, UserContent, agent_claude_code, tool};
+use agentix::{AgentEvent, Message, Request, UserContent, agent, tool};
 use futures::StreamExt;
 
 struct Calculator;
@@ -466,16 +467,15 @@ impl agentix::Tool for Calculator {
 
 #[tokio::main]
 async fn main() {
+    let http = reqwest::Client::new();
+    let base = Request::claude_code()
+        .model("sonnet")
+        .system_prompt("You are a concise math assistant. Always use tools for arithmetic.");
     let history = vec![Message::User(vec![UserContent::Text {
         text: "What is 123 + 456?".into(),
     }])];
 
-    let mut stream = agent_claude_code(
-        ToolBundle::default() + Calculator,
-        "You are a concise math assistant. Always use tools for arithmetic.",
-        ClaudeCodeConfig::new(),      // .model("sonnet"), .binary(..), .arg(..)
-        history,
-    );
+    let mut stream = agent(Calculator, http, base, history, None);
 
     while let Some(event) = stream.next().await {
         match event {
@@ -488,9 +488,9 @@ async fn main() {
 }
 ```
 
-The returned stream yields the same `AgentEvent`s as `agent()`, so code that
-consumes one backend consumes the other unchanged. Dropping the stream aborts
-the subprocess and cleans up temporary MCP-config and session files.
+Each turn spawns a fresh `claude -p`, replays prior history via `--resume`,
+and kills the subprocess once the first assistant turn lands — so the agent
+loop keeps full control over tool dispatch and multi-turn state.
 
 See `examples/10_claude_code.rs` for a runnable example.
 
