@@ -431,9 +431,9 @@ fn generate_raw_tools(method: &ToolMethod) -> proc_macro2::TokenStream {
         .collect();
 
     quote! {{
-        let mut __settings = agentix::schemars::gen::SchemaSettings::draft07();
+        let mut __settings = agentix::schemars::r#gen::SchemaSettings::draft07();
         __settings.inline_subschemas = true;
-        let mut __gen = agentix::schemars::gen::SchemaGenerator::new(__settings);
+        let mut __gen = agentix::schemars::r#gen::SchemaGenerator::new(__settings);
         let mut properties = agentix::serde_json::Map::new();
         #(#prop_inserts)*
 
