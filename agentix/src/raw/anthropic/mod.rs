@@ -48,11 +48,13 @@ pub(crate) async fn stream_anthropic(
 
         while let Some(ev_res) = sse.next().await {
             match ev_res {
-                Ok(ev) if ev.data == "[DONE]" => break,
                 Ok(ev) => {
                     #[cfg(feature = "sensitive-logs")]
                     if crate::sensitive_logs_enabled() {
                         tracing::info!(body = %ev.data, "received raw streaming response chunk");
+                    }
+                    if ev.data == "[DONE]" {
+                        break;
                     }
                     match serde_json::from_str::<StreamEvent>(&ev.data) {
                         Ok(chunk) => {

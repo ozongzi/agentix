@@ -189,12 +189,13 @@ pub fn agent(
             }
 
             // ── Append assistant message to history ───────────────────
+            let has_reasoning = !reasoning_buf.is_empty();
             let assistant_msg = Message::Assistant {
                 content: if reply_buf.is_empty() { None } else { Some(reply_buf.clone()) },
-                reasoning: if reasoning_buf.is_empty() { None } else { Some(reasoning_buf) },
+                reasoning: if has_reasoning { Some(reasoning_buf) } else { None },
                 tool_calls: tool_calls_buf.clone(),
             };
-            if !reply_buf.is_empty() || !tool_calls_buf.is_empty() {
+            if !reply_buf.is_empty() || has_reasoning || !tool_calls_buf.is_empty() {
                 history.push(assistant_msg);
             }
 

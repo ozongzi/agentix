@@ -56,14 +56,14 @@ pub(crate) async fn stream_glm(
 
         while let Some(ev_res) = sse.next().await {
             match ev_res {
-                Ok(ev) if ev.data == "[DONE]" => {
-                    saw_done = true;
-                    break;
-                }
                 Ok(ev) => {
                     #[cfg(feature = "sensitive-logs")]
                     if crate::sensitive_logs_enabled() {
                         tracing::info!(body = %ev.data, "received raw streaming response chunk");
+                    }
+                    if ev.data == "[DONE]" {
+                        saw_done = true;
+                        break;
                     }
                     match serde_json::from_str::<StreamChunk>(&ev.data) {
                         Ok(chunk) => {
