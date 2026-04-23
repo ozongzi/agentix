@@ -242,10 +242,8 @@ fn tool_from_fn(
                 continue;
             };
             let ty = (*pt.ty).clone();
-            if !skip_openai_check {
-                if let Some(err) = check_param_type(&tool_name, &name, &ty) {
-                    schema_errors.push(err);
-                }
+            if !skip_openai_check && let Some(err) = check_param_type(&tool_name, &name, &ty) {
+                schema_errors.push(err);
             }
             let desc = param_docs.get(&name).cloned().unwrap_or_default();
             let optional = is_option(&ty);
@@ -346,10 +344,10 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                         continue;
                     };
                     let ty = (*pt.ty).clone();
-                    if !skip_openai_check {
-                        if let Some(err) = check_param_type(&tool_name, &name, &ty) {
-                            schema_errors.push(err);
-                        }
+                    if !skip_openai_check
+                        && let Some(err) = check_param_type(&tool_name, &name, &ty)
+                    {
+                        schema_errors.push(err);
                     }
                     let desc = param_docs.get(&name).cloned().unwrap_or_default();
                     let optional = is_option(&ty);
