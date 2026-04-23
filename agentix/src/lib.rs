@@ -68,6 +68,22 @@ pub use schemars;
 pub use serde;
 pub use serde_json;
 
+#[cfg(feature = "sensitive-logs")]
+fn sensitive_logs_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("AGENTIX_LOG_BODIES")
+            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(not(feature = "sensitive-logs"))]
+#[allow(dead_code)]
+fn sensitive_logs_enabled() -> bool {
+    false
+}
+
 #[cfg(feature = "mcp")]
 pub use mcp::McpTool;
 #[cfg(feature = "mcp-server")]

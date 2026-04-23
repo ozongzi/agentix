@@ -55,16 +55,35 @@ pub(crate) async fn stream_openai_compatible(
     Ok(async_stream::stream! {
         let mut bufs = StreamBufs::new();
         let mut sse  = resp.bytes_stream().eventsource();
+        let mut saw_done = false;
+        let mut saw_finish_reason = false;
 
         while let Some(ev_res) = sse.next().await {
             match ev_res {
-                Ok(ev) if ev.data == "[DONE]" => break,
-                Ok(ev) => match serde_json::from_str::<StreamChunk>(&ev.data) {
-                    Ok(chunk) => for lev in parse_chunk(chunk, &mut bufs) { yield lev; },
-                    Err(e)    => debug!(data = %ev.data, error = %e, "openai chunk parse failed"),
-                },
+                Ok(ev) if ev.data == "[DONE]" => {
+                    saw_done = true;
+                    break;
+                }
+                Ok(ev) => {
+                    #[cfg(feature = "sensitive-logs")]
+                    if crate::sensitive_logs_enabled() {
+                        tracing::info!(body = %ev.data, "received raw streaming response chunk");
+                    }
+                    match serde_json::from_str::<StreamChunk>(&ev.data) {
+                        Ok(chunk) => {
+                            if chunk.choices.iter().any(|choice| choice.finish_reason.is_some()) {
+                                saw_finish_reason = true;
+                            }
+                            for lev in parse_chunk(chunk, &mut bufs) { yield lev; }
+                        },
+                        Err(e)    => debug!(data = %ev.data, error = %e, "openai chunk parse failed"),
+                    }
+                }
                 Err(e) => { yield LlmEvent::Error(e.to_string()); break; }
             }
+        }
+        if !saw_done && !saw_finish_reason {
+            yield LlmEvent::Error("stream ended without [DONE] or finish_reason".to_string());
         }
         for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
         yield LlmEvent::Done;

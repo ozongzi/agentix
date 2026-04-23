@@ -128,14 +128,38 @@ let bundle = sqrt + MathTools { precision: 4 };  // compose with +
 
 ```toml
 [dependencies]
-agentix = "0.17"
+agentix = "0.18.2"
 
 # Optional: Model Context Protocol (MCP) tool support
-# agentix = { version = "0.17", features = ["mcp"] }
+# agentix = { version = "0.18.2", features = ["mcp"] }
 
 # Optional: drive `claude -p` as the agentic loop using a Claude Max OAuth session
-# agentix = { version = "0.17", features = ["claude-code"] }
+# agentix = { version = "0.18.2", features = ["claude-code"] }
 ```
+
+---
+
+## Logging Full Request / Response Bodies
+
+Full request bodies, response bodies, streaming chunks, and MCP raw request bodies are treated as sensitive and are disabled by default.
+
+To enable them, you must opt in at both compile time and runtime:
+
+```bash
+AGENTIX_LOG_BODIES=1 cargo run --features sensitive-logs
+```
+
+If either one is missing, agentix will not print full bodies.
+
+- Compile-time gate: `sensitive-logs`
+- Runtime gate: `AGENTIX_LOG_BODIES=1`
+
+This affects:
+
+- outbound HTTP request bodies
+- non-streaming HTTP response bodies
+- raw SSE streaming chunks
+- MCP raw HTTP request bodies
 
 ---
 
@@ -451,7 +475,7 @@ OAuth session in the OS keychain.
 Requires the `claude-code` feature and the [`claude` CLI] installed + logged in.
 
 ```toml
-agentix = { version = "0.17", features = ["claude-code"] }
+agentix = { version = "0.18.2", features = ["claude-code"] }
 ```
 
 ```rust

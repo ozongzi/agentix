@@ -51,10 +51,29 @@ pub(crate) async fn post_streaming<T: serde::Serialize>(
         for &(name, value) in extra_headers {
             builder = builder.header(name, value);
         }
+        #[cfg(feature = "sensitive-logs")]
+        if crate::sensitive_logs_enabled() {
+            let request_body = serde_json::to_string(body)
+                .unwrap_or_else(|e| format!("<failed to serialize body: {e}>"));
+
+            tracing::info!(
+                url = %effective_url,
+                body = %request_body,
+                "sending POST request"
+            );
+        }
+
         builder = builder.json(body);
 
         match builder.send().await.map_err(ApiError::Network) {
-            Ok(resp) if resp.status().is_success() => return Ok(resp),
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(
+                    url = %effective_url,
+                    status = %resp.status(),
+                    "received streaming HTTP response"
+                );
+                return Ok(resp);
+            }
             Ok(resp) => {
                 let status = resp.status();
                 let b = resp.text().await.unwrap_or_else(|e| e.to_string());
@@ -91,5 +110,10 @@ pub(crate) async fn post_json<T: serde::Serialize>(
     cfg: &PostConfig,
 ) -> Result<String, ApiError> {
     let resp = post_streaming(http, url, body, token, cfg).await?;
-    resp.text().await.map_err(ApiError::Network)
+    let response_body = resp.text().await.map_err(ApiError::Network)?;
+    #[cfg(feature = "sensitive-logs")]
+    if crate::sensitive_logs_enabled() {
+        tracing::info!(url = %url, body = %response_body, "received raw HTTP response body");
+    }
+    Ok(response_body)
 }

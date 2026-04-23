@@ -49,16 +49,34 @@ pub(crate) async fn stream_gemini(
     Ok(async_stream::stream! {
         let mut bufs = StreamBufs::new();
         let mut sse  = resp.bytes_stream().eventsource();
+        let mut saw_finish_reason = false;
 
         while let Some(ev_res) = sse.next().await {
             match ev_res {
-                Ok(ev) if ev.data == "[DONE]" => break,
-                Ok(ev) => match serde_json::from_str::<Response>(&ev.data) {
-                    Ok(chunk) => for lev in parse_chunk(chunk, &mut bufs) { yield lev; },
-                    Err(e)    => debug!(data = %ev.data, error = %e, "gemini chunk parse failed"),
-                },
+                Ok(ev) => {
+                    #[cfg(feature = "sensitive-logs")]
+                    if crate::sensitive_logs_enabled() {
+                        tracing::info!(body = %ev.data, "received raw streaming response chunk");
+                    }
+                    match serde_json::from_str::<Response>(&ev.data) {
+                        Ok(chunk) => {
+                            if chunk
+                                .candidates
+                                .as_ref()
+                                .is_some_and(|candidates| candidates.iter().any(|candidate| candidate.finish_reason.is_some()))
+                            {
+                                saw_finish_reason = true;
+                            }
+                            for lev in parse_chunk(chunk, &mut bufs) { yield lev; }
+                        },
+                        Err(e)    => debug!(data = %ev.data, error = %e, "gemini chunk parse failed"),
+                    }
+                }
                 Err(e) => { yield LlmEvent::Error(e.to_string()); break; }
             }
+        }
+        if !saw_finish_reason {
+            yield LlmEvent::Error("stream ended without finish_reason".to_string());
         }
         for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
         yield LlmEvent::Done;

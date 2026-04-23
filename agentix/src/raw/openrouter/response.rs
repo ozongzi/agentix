@@ -18,6 +18,7 @@ pub struct Delta {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
+    #[serde(alias = "reasoning_content")]
     pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<DeltaToolCall>>,
@@ -90,6 +91,7 @@ pub struct CompleteMessage {
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
+    #[serde(alias = "reasoning_content")]
     pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<CompleteToolCall>>,

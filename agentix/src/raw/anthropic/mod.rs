@@ -44,13 +44,21 @@ pub(crate) async fn stream_anthropic(
     Ok(async_stream::stream! {
         let mut bufs = StreamBufs::new();
         let mut sse  = resp.bytes_stream().eventsource();
+        let mut saw_message_stop = false;
 
         while let Some(ev_res) = sse.next().await {
             match ev_res {
                 Ok(ev) if ev.data == "[DONE]" => break,
                 Ok(ev) => {
+                    #[cfg(feature = "sensitive-logs")]
+                    if crate::sensitive_logs_enabled() {
+                        tracing::info!(body = %ev.data, "received raw streaming response chunk");
+                    }
                     match serde_json::from_str::<StreamEvent>(&ev.data) {
                         Ok(chunk) => {
+                            if matches!(chunk, StreamEvent::MessageStop) {
+                                saw_message_stop = true;
+                            }
                             for lev in parse_stream_event(chunk, &mut bufs) { yield lev; }
                         }
                         Err(e) => {
@@ -61,7 +69,9 @@ pub(crate) async fn stream_anthropic(
                 Err(e) => { yield LlmEvent::Error(e.to_string()); break; }
             }
         }
-
+        if !saw_message_stop {
+            yield LlmEvent::Error("stream ended without message_stop".to_string());
+        }
         for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
         yield LlmEvent::Done;
     }

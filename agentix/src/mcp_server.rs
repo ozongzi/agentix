@@ -62,6 +62,31 @@ use tracing::info;
 use crate::request::{Content as AgentixContent, ImageData};
 use crate::tool_trait::{Tool, ToolBundle};
 
+#[cfg(all(feature = "mcp-server", feature = "sensitive-logs"))]
+async fn log_raw_request_body(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let (parts, body) = req.into_parts();
+    let method = parts.method.clone();
+    let uri = parts.uri.clone();
+
+    match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(bytes) => {
+            let raw_body = String::from_utf8_lossy(&bytes);
+            info!(%method, %uri, body = %raw_body, "received raw HTTP request body");
+
+            let req = axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
+            next.run(req).await
+        }
+        Err(error) => {
+            info!(%method, %uri, %error, "failed to read raw HTTP request body");
+            let req = axum::http::Request::from_parts(parts, axum::body::Body::empty());
+            next.run(req).await
+        }
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve an image URL into base64-encoded bytes. Handles `data:` URLs
@@ -177,7 +202,16 @@ impl McpServer {
             StreamableHttpServerConfig::default(),
         );
 
-        axum::Router::new().fallback_service(service)
+        let router = axum::Router::new();
+        #[cfg(feature = "sensitive-logs")]
+        let router = if crate::sensitive_logs_enabled() {
+            use axum::middleware;
+            router.layer(middleware::from_fn(log_raw_request_body))
+        } else {
+            router
+        };
+
+        router.fallback_service(service)
     }
 
     /// Bind a TCP listener and serve the tools over HTTP using the MCP
