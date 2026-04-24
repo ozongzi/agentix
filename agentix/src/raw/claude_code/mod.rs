@@ -58,6 +58,25 @@ fn ensure_toolu_id(id: &str, id_map: &mut HashMap<String, String>) -> String {
     mapped
 }
 
+fn append_reminder_content(content: &mut serde_json::Value, reminder: Option<&str>) {
+    let Some(reminder) = reminder.filter(|s| !s.is_empty()) else {
+        return;
+    };
+    let block = serde_json::json!({"type": "text", "text": reminder});
+    match content {
+        serde_json::Value::String(text) => {
+            *content = serde_json::Value::Array(vec![
+                serde_json::json!({"type": "text", "text": text.clone()}),
+                block,
+            ]);
+        }
+        serde_json::Value::Array(blocks) => blocks.push(block),
+        _ => {
+            *content = serde_json::Value::Array(vec![block]);
+        }
+    }
+}
+
 fn assistant_replay_message(
     assistant: Message,
     session_id: Option<&str>,
@@ -214,6 +233,7 @@ async fn start_claude(
         self::session::remap_tool_use_ids(&mut last_user_content, &id_map);
         stdin_prefix.push(msg);
     }
+    append_reminder_content(&mut last_user_content, config.reminder.as_deref());
 
     let mut args: Vec<String> = vec![
         "-p".into(),
