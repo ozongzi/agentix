@@ -163,6 +163,20 @@ pub(crate) fn user_content_to_json(parts: &[Content]) -> serde_json::Value {
                     }
                 })
             }
+            Content::Document(doc) => {
+                let (src_type, src_field, src_value) = match &doc.data {
+                    crate::request::DocumentData::Base64(b) => ("base64", "data", b.clone()),
+                    crate::request::DocumentData::Url(u) => ("url", "url", u.clone()),
+                };
+                serde_json::json!({
+                    "type": "document",
+                    "source": {
+                        "type": src_type,
+                        "media_type": doc.mime_type,
+                        src_field: src_value,
+                    }
+                })
+            }
         })
         .collect();
     serde_json::Value::Array(blocks)

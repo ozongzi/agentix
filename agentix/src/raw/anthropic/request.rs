@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ReasoningEffort, UserContent};
+use crate::request::{DocumentData, ImageData, Message, ReasoningEffort, UserContent};
 
 // ── Cache control ─────────────────────────────────────────────────────────────
 
@@ -104,6 +104,11 @@ pub enum ContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    Document {
+        source: DocumentSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     Thinking {
         thinking: String,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,6 +151,13 @@ pub enum ToolResultPart {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DocumentSource {
     Base64 { media_type: String, data: String },
     Url { url: String },
 }
@@ -271,10 +283,16 @@ pub(crate) fn build_anthropic_request(
                 let wire_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolResultContent::Text(text.clone())
                 } else {
+                    // Anthropic `tool_result.content` only accepts text + image
+                    // parts. Documents in tool results are dropped; documents
+                    // belong on user messages where the `document` block is
+                    // supported.
                     let parts = content
                         .iter()
-                        .map(|p| match p {
-                            Content::Text { text } => ToolResultPart::Text { text: text.clone() },
+                        .filter_map(|p| match p {
+                            Content::Text { text } => {
+                                Some(ToolResultPart::Text { text: text.clone() })
+                            }
                             Content::Image(img) => {
                                 let source = match &img.data {
                                     ImageData::Base64(data) => ImageSource::Base64 {
@@ -283,8 +301,9 @@ pub(crate) fn build_anthropic_request(
                                     },
                                     ImageData::Url(url) => ImageSource::Url { url: url.clone() },
                                 };
-                                ToolResultPart::Image { source }
+                                Some(ToolResultPart::Image { source })
                             }
+                            Content::Document(_) => None,
                         })
                         .collect();
                     ToolResultContent::Parts(parts)
@@ -392,7 +411,9 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
         unreachable!()
     }
     let has_text = parts.iter().any(|p| matches!(p, UserContent::Text { .. }));
-    let has_image = parts.iter().any(|p| matches!(p, UserContent::Image(_)));
+    let has_non_text = parts
+        .iter()
+        .any(|p| matches!(p, UserContent::Image(_) | UserContent::Document(_)));
     let mut blocks: Vec<ContentBlock> = parts
         .into_iter()
         .map(|p| match p {
@@ -410,9 +431,19 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
                 },
                 cache_control: None,
             },
+            UserContent::Document(doc) => ContentBlock::Document {
+                source: match doc.data {
+                    DocumentData::Base64(data) => DocumentSource::Base64 {
+                        media_type: doc.mime_type,
+                        data,
+                    },
+                    DocumentData::Url(url) => DocumentSource::Url { url },
+                },
+                cache_control: None,
+            },
         })
         .collect();
-    if has_image && !has_text {
+    if has_non_text && !has_text {
         blocks.push(ContentBlock::Text {
             text: " ".to_string(),
             cache_control: None,
@@ -497,6 +528,7 @@ fn set_cache_control(block: &mut ContentBlock) {
     match block {
         ContentBlock::Text { cache_control, .. }
         | ContentBlock::Image { cache_control, .. }
+        | ContentBlock::Document { cache_control, .. }
         | ContentBlock::ToolUse { cache_control, .. }
         | ContentBlock::ToolResult { cache_control, .. } => {
             *cache_control = Some(CacheControl::ephemeral());
@@ -644,6 +676,61 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert!(json["thinking"].is_null());
         assert!(json["output_config"].is_null());
+    }
+
+    #[test]
+    fn document_base64_emits_document_block() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let msgs = vec![Message::User(vec![
+            UserContent::Text {
+                text: "summarize".into(),
+            },
+            UserContent::Document(DocumentContent {
+                data: DocumentData::Base64("UERGZmFrZQ==".into()),
+                mime_type: "application/pdf".into(),
+                filename: None,
+            }),
+        ])];
+        let req = build_anthropic_request(&cfg("S"), &msgs, &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        let user = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap();
+        let blocks = user["content"].as_array().unwrap();
+        let doc = blocks.iter().find(|b| b["type"] == "document").unwrap();
+        assert_eq!(doc["source"]["type"], "base64");
+        assert_eq!(doc["source"]["media_type"], "application/pdf");
+        assert_eq!(doc["source"]["data"], "UERGZmFrZQ==");
+    }
+
+    #[test]
+    fn document_url_emits_url_source() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let msgs = vec![Message::User(vec![
+            UserContent::Text {
+                text: "summarize".into(),
+            },
+            UserContent::Document(DocumentContent {
+                data: DocumentData::Url("https://example.com/doc.pdf".into()),
+                mime_type: "application/pdf".into(),
+                filename: None,
+            }),
+        ])];
+        let req = build_anthropic_request(&cfg("S"), &msgs, &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        let user = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap();
+        let blocks = user["content"].as_array().unwrap();
+        let doc = blocks.iter().find(|b| b["type"] == "document").unwrap();
+        assert_eq!(doc["source"]["type"], "url");
+        assert_eq!(doc["source"]["url"], "https://example.com/doc.pdf");
     }
 
     #[test]

@@ -325,6 +325,21 @@ impl ServerHandler for McpService {
                             },
                         }
                     }
+                    // MCP rmcp Content doesn't have a first-class document
+                    // part; tool outputs rarely return documents, so emit a
+                    // text placeholder describing the payload.
+                    AgentixContent::Document(doc) => {
+                        let mime = doc.mime_type;
+                        let filename = doc.filename.as_deref().unwrap_or("document");
+                        match doc.data {
+                            crate::request::DocumentData::Url(url) => {
+                                Content::text(format!("[document: {filename} ({mime}) @ {url}]"))
+                            }
+                            crate::request::DocumentData::Base64(_) => Content::text(format!(
+                                "[document: {filename} ({mime}, base64, omitted)]"
+                            )),
+                        }
+                    }
                 });
             }
             Ok(CallToolResult::success(contents))

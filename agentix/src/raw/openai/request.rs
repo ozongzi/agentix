@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ReasoningEffort, UserContent};
+use crate::request::{DocumentData, ImageData, Message, ReasoningEffort, UserContent};
 
 // ── Request ───────────────────────────────────────────────────────────────────
 
@@ -122,6 +122,17 @@ pub enum ContentPart {
         #[serde(skip_serializing_if = "Option::is_none")]
         detail: Option<String>,
     },
+    /// Document (PDF etc.). Either inline base64 via `file_data` (must be a
+    /// data URL) or a public `file_url`. `filename` is required alongside
+    /// `file_data`.
+    InputFile {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file_url: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+    },
 }
 
 // ── Tools ─────────────────────────────────────────────────────────────────────
@@ -218,12 +229,13 @@ pub(crate) fn build_responses_request(
             Message::ToolResult { call_id, content } => {
                 use crate::request::Content;
                 // Responses API wants a plain string output. Concatenate text
-                // parts and drop images (no `input_image` in tool results yet).
+                // parts; images and documents are not accepted in
+                // `function_call_output`, so drop them.
                 let output: String = content
                     .iter()
                     .filter_map(|p| match p {
                         Content::Text { text } => Some(text.as_str()),
-                        Content::Image(_) => None,
+                        Content::Image(_) | Content::Document(_) => None,
                     })
                     .collect::<Vec<_>>()
                     .join("");
@@ -327,9 +339,33 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
                     detail: None,
                 }
             }
+            UserContent::Document(doc) => match doc.data {
+                DocumentData::Url(u) => ContentPart::InputFile {
+                    file_data: None,
+                    file_url: Some(u),
+                    filename: doc.filename,
+                },
+                DocumentData::Base64(b) => ContentPart::InputFile {
+                    file_data: Some(format!("data:{};base64,{}", doc.mime_type, b)),
+                    file_url: None,
+                    // OpenAI requires a filename alongside `file_data`. Fall
+                    // back to a generic PDF placeholder if none was supplied.
+                    filename: Some(
+                        doc.filename
+                            .unwrap_or_else(|| default_filename(&doc.mime_type)),
+                    ),
+                },
+            },
         })
         .collect();
     MessageContent::Parts(blocks)
+}
+
+fn default_filename(mime: &str) -> String {
+    match mime {
+        "application/pdf" => "document.pdf".into(),
+        _ => "document".into(),
+    }
 }
 
 fn openai_tool_from_shared(t: &ToolDefinition) -> Tool {
@@ -531,6 +567,52 @@ mod tests {
         assert_eq!(items[3]["encrypted_content"], "enc_2");
         assert_eq!(items[4]["type"], "function_call");
         assert_eq!(items[4]["call_id"], "call_2");
+    }
+
+    #[test]
+    fn document_base64_emits_input_file_with_filename() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let parts = vec![
+            UserContent::Text {
+                text: "please read".into(),
+            },
+            UserContent::Document(DocumentContent {
+                data: DocumentData::Base64("UERGZmFrZQ==".into()),
+                mime_type: "application/pdf".into(),
+                filename: Some("spec.pdf".into()),
+            }),
+        ];
+        let req = build_responses_request(&cfg(), vec![Message::User(parts)], &[], None, false);
+        let json = serde_json::to_value(&req).unwrap();
+        let parts = json["input"][0]["content"].as_array().unwrap();
+        assert_eq!(parts[1]["type"], "input_file");
+        assert_eq!(parts[1]["filename"], "spec.pdf");
+        assert_eq!(
+            parts[1]["file_data"],
+            "data:application/pdf;base64,UERGZmFrZQ=="
+        );
+        assert!(parts[1]["file_url"].is_null());
+    }
+
+    #[test]
+    fn document_url_emits_input_file_with_file_url() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let parts = vec![
+            UserContent::Text {
+                text: "read this".into(),
+            },
+            UserContent::Document(DocumentContent {
+                data: DocumentData::Url("https://example.com/doc.pdf".into()),
+                mime_type: "application/pdf".into(),
+                filename: None,
+            }),
+        ];
+        let req = build_responses_request(&cfg(), vec![Message::User(parts)], &[], None, false);
+        let json = serde_json::to_value(&req).unwrap();
+        let parts = json["input"][0]["content"].as_array().unwrap();
+        assert_eq!(parts[1]["type"], "input_file");
+        assert_eq!(parts[1]["file_url"], "https://example.com/doc.pdf");
+        assert!(parts[1]["file_data"].is_null());
     }
 
     #[test]

@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ReasoningEffort, UserContent};
+use crate::request::{DocumentData, ImageData, Message, ReasoningEffort, UserContent};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -34,6 +34,9 @@ pub struct Content {
 pub enum Part {
     Text(String),
     InlineData(Blob),
+    /// Public URL pointer (PDFs, videos, etc.). Maps to Gemini's `file_data`
+    /// part shape: `{file_data: {mime_type, file_uri}}`.
+    FileData(FileData),
     FunctionCall(FunctionCall),
     FunctionResponse(FunctionResponse),
     /// Raw opaque JSON — emitted verbatim to preserve a part captured from
@@ -57,6 +60,9 @@ impl serde::Serialize for Part {
                     Part::InlineData(b) => {
                         map.serialize_entry("inline_data", b)?;
                     }
+                    Part::FileData(fd) => {
+                        map.serialize_entry("file_data", fd)?;
+                    }
                     Part::FunctionCall(fc) => {
                         map.serialize_entry("function_call", fc)?;
                     }
@@ -76,6 +82,13 @@ impl serde::Serialize for Part {
 pub struct Blob {
     pub mime_type: String,
     pub data: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileData {
+    pub mime_type: String,
+    pub file_uri: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -185,6 +198,16 @@ pub(crate) fn build_gemini_request(
                                     ImageData::Url(u) => u.clone(),
                                 },
                             }),
+                            UserContent::Document(doc) => match &doc.data {
+                                DocumentData::Base64(b) => Part::InlineData(Blob {
+                                    mime_type: doc.mime_type.clone(),
+                                    data: b.clone(),
+                                }),
+                                DocumentData::Url(u) => Part::FileData(FileData {
+                                    mime_type: doc.mime_type.clone(),
+                                    file_uri: u.clone(),
+                                }),
+                            },
                         })
                         .collect(),
                 });
@@ -535,5 +558,45 @@ mod tests {
         assert_eq!(parts[0]["thoughtSignature"], "<Sig A>");
         assert_eq!(parts[0]["functionCall"]["name"], "get_weather");
         assert_eq!(parts[1]["thought"], true);
+    }
+
+    #[test]
+    fn document_base64_emits_inline_data() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let msgs = vec![Message::User(vec![
+            UserContent::Text {
+                text: "summarize".into(),
+            },
+            UserContent::Document(DocumentContent {
+                data: DocumentData::Base64("UERGZmFrZQ==".into()),
+                mime_type: "application/pdf".into(),
+                filename: None,
+            }),
+        ])];
+        let req = build_gemini_request(&cfg("gemini-3-pro"), &msgs, &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        let parts = json["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts[1]["inline_data"]["mimeType"], "application/pdf");
+        assert_eq!(parts[1]["inline_data"]["data"], "UERGZmFrZQ==");
+    }
+
+    #[test]
+    fn document_url_emits_file_data() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let msgs = vec![Message::User(vec![UserContent::Document(
+            DocumentContent {
+                data: DocumentData::Url("https://example.com/doc.pdf".into()),
+                mime_type: "application/pdf".into(),
+                filename: None,
+            },
+        )])];
+        let req = build_gemini_request(&cfg("gemini-3-pro"), &msgs, &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        let parts = json["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["file_data"]["mimeType"], "application/pdf");
+        assert_eq!(
+            parts[0]["file_data"]["fileUri"],
+            "https://example.com/doc.pdf"
+        );
     }
 }

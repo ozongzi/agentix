@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ReasoningEffort, ToolChoice, UserContent};
+use crate::request::{DocumentData, ImageData, Message, ReasoningEffort, ToolChoice, UserContent};
 
 #[derive(Debug, Serialize)]
 pub struct Request {
@@ -89,6 +89,20 @@ pub enum ContentPart {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    /// OpenRouter `file` content part (PDF plugin). `file.file_data` is a
+    /// data URL (`data:application/pdf;base64,...`) or a public URL.
+    /// `file.filename` is required by some underlying providers.
+    File {
+        file: FilePart,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct FilePart {
+    pub filename: String,
+    pub file_data: String,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -176,13 +190,17 @@ pub(crate) fn build_openrouter_request(
                 let tool_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolMessageContent::Text(text.clone())
                 } else {
+                    // Tool-result documents are not accepted by the OpenAI-
+                    // chat-compatible proxy shape OpenRouter exposes, so we
+                    // drop them — documents belong in user messages where the
+                    // `file` part is supported.
                     let parts = content
                         .iter()
-                        .map(|p| match p {
-                            Content::Text { text } => ContentPart::Text {
+                        .filter_map(|p| match p {
+                            Content::Text { text } => Some(ContentPart::Text {
                                 text: text.clone(),
                                 cache_control: None,
-                            },
+                            }),
                             Content::Image(img) => {
                                 let url = match &img.data {
                                     ImageData::Base64(b) => {
@@ -190,11 +208,12 @@ pub(crate) fn build_openrouter_request(
                                     }
                                     ImageData::Url(u) => u.clone(),
                                 };
-                                ContentPart::ImageUrl {
+                                Some(ContentPart::ImageUrl {
                                     image_url: ImageUrl { url, detail: None },
                                     cache_control: None,
-                                }
+                                })
                             }
+                            Content::Document(_) => None,
                         })
                         .collect();
                     ToolMessageContent::Parts(parts)
@@ -273,6 +292,21 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
                     cache_control: None,
                 }
             }
+            UserContent::Document(doc) => {
+                let file_data = match doc.data {
+                    DocumentData::Url(u) => u,
+                    DocumentData::Base64(b) => format!("data:{};base64,{}", doc.mime_type, b),
+                };
+                ContentPart::File {
+                    file: FilePart {
+                        filename: doc
+                            .filename
+                            .unwrap_or_else(|| default_filename(&doc.mime_type)),
+                        file_data,
+                    },
+                    cache_control: None,
+                }
+            }
         })
         .collect();
 
@@ -280,6 +314,13 @@ fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
         return MessageContent::Text(text.clone());
     }
     MessageContent::Parts(blocks)
+}
+
+fn default_filename(mime: &str) -> String {
+    match mime {
+        "application/pdf" => "document.pdf".into(),
+        _ => "document".into(),
+    }
 }
 
 // Stamp cache_control: ephemeral on system prompt, first user message (summary), and last user message (latest turn).
@@ -356,7 +397,9 @@ fn append_reminder(messages: &mut Vec<OaiMessage>, reminder: Option<&str>) {
 
 fn set_cache_control(part: &mut ContentPart) {
     match part {
-        ContentPart::Text { cache_control, .. } | ContentPart::ImageUrl { cache_control, .. } => {
+        ContentPart::Text { cache_control, .. }
+        | ContentPart::ImageUrl { cache_control, .. }
+        | ContentPart::File { cache_control, .. } => {
             *cache_control = Some(CacheControl::ephemeral());
         }
     }
@@ -422,5 +465,35 @@ mod tests {
         assert_eq!(rd[0]["type"], "reasoning.encrypted");
         assert_eq!(rd[0]["data"], "ENC_A");
         assert_eq!(rd[1]["signature"], "SIG_A");
+    }
+
+    #[test]
+    fn document_base64_emits_file_part() {
+        use crate::request::{DocumentContent, DocumentData, UserContent};
+        let history = vec![Message::User(vec![
+            UserContent::Text {
+                text: "read".into(),
+            },
+            UserContent::Document(DocumentContent {
+                data: DocumentData::Base64("UERGZmFrZQ==".into()),
+                mime_type: "application/pdf".into(),
+                filename: Some("spec.pdf".into()),
+            }),
+        ])];
+        let req = build_openrouter_request(&cfg(), history, &[], None, false);
+        let json = serde_json::to_value(&req).unwrap();
+        let user = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap();
+        let parts = user["content"].as_array().unwrap();
+        let file_part = parts.iter().find(|p| p["type"] == "file").unwrap();
+        assert_eq!(file_part["file"]["filename"], "spec.pdf");
+        assert_eq!(
+            file_part["file"]["file_data"],
+            "data:application/pdf;base64,UERGZmFrZQ=="
+        );
     }
 }

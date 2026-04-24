@@ -2,6 +2,35 @@
 
 ---
 
+## [0.22.0] - 2026-04-25
+
+### Summary
+
+Document (PDF etc.) support added to the multimodal `Content` enum. Providers that natively support files (Anthropic, OpenAI Responses, Gemini, OpenRouter) emit them on the wire; OpenAI-chat-compat providers that don't (DeepSeek, Grok, GLM, Kimi) silently drop them.
+
+### New features
+
+- `Content::Document(DocumentContent)` variant with `DocumentData::{Base64, Url}`. Optional `filename` (OpenAI's `input_file` requires one alongside `file_data`; a default is supplied if absent).
+- **Anthropic** — emits `{"type": "document", "source": {"type": "base64" | "url", ...}}` blocks. `cache_control` stamps apply to documents like any other block. Tool-result documents are dropped (not accepted by the API).
+- **OpenAI Responses** — emits `{"type": "input_file", "file_data" | "file_url", "filename"}` content parts.
+- **Gemini** — base64 routes to `inline_data`, URLs route to `file_data` (`{mime_type, file_uri}`).
+- **OpenRouter** — emits `{"type": "file", "file": {"filename", "file_data"}}` (the PDF plugin shape).
+- **claude-code session** — mirrors the Anthropic document block shape on stdin JSON.
+
+### Non-supporting providers
+
+DeepSeek, Grok, GLM, Kimi silently drop `Content::Document` parts (both in user messages and tool results). Users who need PDFs with these models route through `Provider::OpenRouter` with a matching `base_url`.
+
+### Breaking changes
+
+- `Content` enum gains a new variant. Exhaustive external `match` on it must add a `Content::Document(_)` arm.
+
+### Fixes
+
+- None.
+
+---
+
 ## [0.21.0] - 2026-04-25
 
 ### Summary

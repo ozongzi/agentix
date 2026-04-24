@@ -53,12 +53,42 @@ pub enum ImageData {
     Url(String),
 }
 
+/// Document (e.g. PDF) content that can be embedded in a user message.
+///
+/// Supported providers: Anthropic (`document` block), OpenAI Responses API
+/// (`input_file`), Gemini (`inline_data` / `file_data`), OpenRouter (`file`
+/// plugin). Non-multimodal OpenAI-compatible providers (DeepSeek, Grok,
+/// Kimi, GLM) silently drop document parts on request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct DocumentContent {
+    /// The document payload.
+    pub data: DocumentData,
+    /// MIME type, e.g. `"application/pdf"`.
+    pub mime_type: String,
+    /// Optional filename. OpenAI's `input_file` requires a filename when
+    /// using `file_data`; if absent the provider adapter supplies a generic
+    /// placeholder (`"document.pdf"` for PDFs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+}
+
+/// How the document data is provided.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentData {
+    /// Base64-encoded document bytes.
+    Base64(String),
+    /// Publicly accessible URL.
+    Url(String),
+}
+
 /// A single content block — used in user messages, tool results, and tool outputs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
     Text { text: String },
     Image(ImageContent),
+    Document(DocumentContent),
 }
 
 impl Content {
@@ -132,6 +162,7 @@ impl Message {
                             tokens += bpe.encode_with_special_tokens(t).len()
                         }
                         UserContent::Image(_) => tokens += 1000, // rough fixed cost for images
+                        UserContent::Document(_) => tokens += 2000, // rough fixed cost for docs
                     }
                 }
             }
@@ -161,6 +192,7 @@ impl Message {
                             tokens += bpe.encode_with_special_tokens(text).len()
                         }
                         Content::Image(_) => tokens += 1000,
+                        Content::Document(_) => tokens += 2000,
                     }
                 }
             }

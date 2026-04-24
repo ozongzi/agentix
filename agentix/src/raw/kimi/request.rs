@@ -135,10 +135,14 @@ pub(crate) fn build_kimi_request(
                 let tool_content = if let [Content::Text { text }] = content.as_slice() {
                     ToolMessageContent::Text(text.clone())
                 } else {
+                    // Kimi chat-completions doesn't accept file parts —
+                    // drop Document entries silently.
                     let parts = content
                         .iter()
-                        .map(|p| match p {
-                            Content::Text { text } => ContentPart::Text { text: text.clone() },
+                        .filter_map(|p| match p {
+                            Content::Text { text } => {
+                                Some(ContentPart::Text { text: text.clone() })
+                            }
                             Content::Image(img) => {
                                 let url = match &img.data {
                                     ImageData::Base64(b) => {
@@ -146,10 +150,11 @@ pub(crate) fn build_kimi_request(
                                     }
                                     ImageData::Url(u) => u.clone(),
                                 };
-                                ContentPart::ImageUrl {
+                                Some(ContentPart::ImageUrl {
                                     image_url: ImageUrl { url, detail: None },
-                                }
+                                })
                             }
+                            Content::Document(_) => None,
                         })
                         .collect();
                     ToolMessageContent::Parts(parts)
@@ -195,17 +200,19 @@ pub(crate) fn build_kimi_request(
 fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {
     let blocks: Vec<ContentPart> = parts
         .into_iter()
-        .map(|p| match p {
-            UserContent::Text { text: t } => ContentPart::Text { text: t },
+        .filter_map(|p| match p {
+            UserContent::Text { text: t } => Some(ContentPart::Text { text: t }),
             UserContent::Image(img) => {
                 let url = match img.data {
                     ImageData::Url(u) => u,
                     ImageData::Base64(b) => format!("data:{};base64,{}", img.mime_type, b),
                 };
-                ContentPart::ImageUrl {
+                Some(ContentPart::ImageUrl {
                     image_url: ImageUrl { url, detail: None },
-                }
+                })
             }
+            // Kimi has no wire for files — silently drop.
+            UserContent::Document(_) => None,
         })
         .collect();
 
