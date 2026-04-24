@@ -155,6 +155,7 @@ pub(crate) async fn complete_deepseek(
                     .collect()
             })
             .unwrap_or_default(),
+        provider_data: None,
         usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
         finish_reason: finish_reason.unwrap_or_default(),
     })

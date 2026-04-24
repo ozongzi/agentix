@@ -112,6 +112,7 @@ pub(crate) fn build_glm_request(
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 messages.push(GlmMessage::Assistant {
                     content,

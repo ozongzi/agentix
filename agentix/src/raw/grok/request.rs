@@ -112,6 +112,7 @@ pub(crate) fn build_grok_request(
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 messages.push(GrokMessage::Assistant {
                     content,

@@ -131,6 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 content: Some(assistant_reply),
                 reasoning: None,
                 tool_calls: vec![],
+                provider_data: None,
             });
         }
     }

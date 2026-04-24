@@ -2,6 +2,48 @@
 
 ---
 
+## [0.20.0] - 2026-04-25
+
+### Summary
+
+Cross-provider reasoning control via a single `ReasoningEffort` enum, opaque per-turn provider state for round-tripping Anthropic thinking signatures, and DeepSeek/Anthropic adaptive-thinking wire support.
+
+### New features
+
+**`ReasoningEffort` — cross-provider reasoning hint**
+- New `agentix::ReasoningEffort` enum: `None | Minimal | Low | Medium | High | XHigh | Max`.
+- `None` explicitly disables thinking on providers that support a toggle (DeepSeek, Anthropic).
+- Any other value engages thinking; `Request::reasoning_effort(e)` is the single builder entry point.
+- Providers coerce to their own scale automatically — see README for the mapping table.
+
+**`Message::Assistant.provider_data` — opaque per-turn state**
+- New `provider_data: Option<serde_json::Value>` field carries provider-specific state (currently: Anthropic thinking-block sequences with signatures) across turns.
+- Only the producing provider's raw layer consumes it; other providers ignore it transparently.
+
+**`LlmEvent::AssistantState` + `#[non_exhaustive]`**
+- New variant carries opaque per-turn state from the stream; the agent loop attaches it to the reconstructed `Message::Assistant.provider_data`.
+- `LlmEvent` is now `#[non_exhaustive]`, so future variants will not break downstream match arms (add `_ => {}` to your matchers).
+
+**DeepSeek: thinking mode derived from effort**
+- `reasoning_effort(None)` → `{"thinking": {"type": "disabled"}}` + sampling params flow through.
+- Any other effort → `{"thinking": {"type": "enabled"}}` + `reasoning_effort: "high" | "max"` (Minimal/Low/Medium/High collapse to `high`, XHigh/Max collapse to `max`).
+- Unset effort → `{"thinking": {"type": "enabled"}}` with no effort (DeepSeek's own default, currently `high`).
+- Sampling-only parameters (`temperature`, `top_p`, `presence_penalty`, `frequency_penalty`) are type-level incompatible with thinking mode — setting them while thinking is on drops them before the wire with a tracing warn, matching the API's "accepted but ignored" semantics.
+
+**Anthropic: adaptive thinking + signature round-trip**
+- `build_anthropic_request` emits `thinking: {type: "adaptive" | "disabled"}` and `output_config: {effort: ...}` derived from `ReasoningEffort`.
+- Response parser preserves `signature` on thinking blocks, adds `redacted_thinking` support, and consumes `signature_delta` in streams.
+- When a turn contains both thinking **and** tool_use blocks, the raw layer captures the full content array (thinking + tool_use + text, interleaved) into `CompleteResponse.provider_data` / `LlmEvent::AssistantState`. On the next turn, the request serializer emits these blocks verbatim to preserve the signature ordering Anthropic enforces.
+
+### Breaking changes
+
+- **`Message::Assistant` has a new required field `provider_data: Option<serde_json::Value>`.** Any code constructing it directly must add `provider_data: None`.
+- **`CompleteResponse` has a new required field `provider_data: Option<serde_json::Value>`.** Any code constructing it directly must add `provider_data: None`.
+- **`LlmEvent` is now `#[non_exhaustive]` and has a new variant `AssistantState(Value)`.** Existing exhaustive matchers in downstream crates should add `_ => {}` (or explicitly handle `AssistantState`).
+- **No more `Request::thinking(bool)` builder.** Use `reasoning_effort(ReasoningEffort::None)` to explicitly disable thinking, or any other `ReasoningEffort` value to engage it. Leaving `reasoning_effort` unset keeps the provider default.
+
+---
+
 ## [0.13.0] - 2026-04-11
 
 ### New features

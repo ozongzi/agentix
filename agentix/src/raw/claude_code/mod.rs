@@ -85,6 +85,7 @@ fn assistant_replay_message(
         content,
         reasoning: _,
         tool_calls,
+        provider_data: _,
     } = assistant
     else {
         return None;
@@ -727,6 +728,7 @@ pub(crate) async fn complete_claude_code(
             Some(reasoning_buf)
         },
         tool_calls,
+        provider_data: None,
         usage,
         finish_reason,
     })

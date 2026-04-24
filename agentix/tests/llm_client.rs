@@ -224,6 +224,7 @@ mod message_types {
             content: Some("hi".into()),
             reasoning: None,
             tool_calls: vec![],
+            provider_data: None,
         };
         assert!(matches!(m, Message::Assistant { .. }));
     }
@@ -245,6 +246,7 @@ mod message_types {
                 content: Some("4".into()),
                 reasoning: None,
                 tool_calls: vec![],
+                provider_data: None,
             })
             .user("And 3+3?");
         assert_eq!(r.messages.len(), 3);
@@ -262,6 +264,7 @@ mod message_types {
                     name: "search".into(),
                     arguments: r#"{"q":"X"}"#.into(),
                 }],
+                provider_data: None,
             })
             .message(Message::ToolResult {
                 call_id: "call_1".into(),

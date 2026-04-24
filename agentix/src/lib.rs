@@ -55,8 +55,8 @@ pub use error::ApiError;
 pub use msg::LlmEvent;
 pub use raw::shared::ToolDefinition;
 pub use request::{
-    Content, ImageContent, ImageData, Message, Provider, Request, ResponseFormat, ToolCall,
-    ToolChoice, UserContent, truncate_to_token_budget,
+    Content, ImageContent, ImageData, Message, Provider, ReasoningEffort, Request, ResponseFormat,
+    ToolCall, ToolChoice, UserContent, truncate_to_token_budget,
 };
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
 pub use types::{CompleteResponse, FinishReason, UsageStats};
@@ -73,7 +73,12 @@ fn sensitive_logs_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var("AGENTIX_LOG_BODIES")
-            .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|v| {
+                matches!(
+                    v.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false)
     })
 }

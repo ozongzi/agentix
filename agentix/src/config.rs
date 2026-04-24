@@ -16,6 +16,9 @@ pub struct AgentConfig {
     pub max_tokens: Option<u32>,
     /// Sampling temperature. `None` = provider default.
     pub temperature: Option<f32>,
+    /// Reasoning-effort hint (providers coerce as needed). `None` = default;
+    /// `Some(ReasoningEffort::None)` explicitly disables thinking where supported.
+    pub reasoning_effort: Option<crate::request::ReasoningEffort>,
     /// Extra JSON fields merged into the request body (provider-specific).
     pub extra_body: Map<String, Value>,
     /// Response format constraint (provider support varies).
@@ -36,6 +39,7 @@ impl Default for AgentConfig {
             reminder: None,
             max_tokens: None,
             temperature: None,
+            reasoning_effort: None,
             extra_body: Map::new(),
             response_format: None,
             max_retries: 3,

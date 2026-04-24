@@ -84,6 +84,10 @@ pub struct CompleteResponse {
     pub reasoning: Option<String>,
     /// Tool calls requested by the model.
     pub tool_calls: Vec<crate::request::ToolCall>,
+    /// Opaque per-turn state for providers that need round-tripping
+    /// (e.g. Anthropic thinking blocks + signatures). Attach to
+    /// [`crate::Message::Assistant.provider_data`] to preserve across turns.
+    pub provider_data: Option<serde_json::Value>,
     /// Token usage statistics.
     pub usage: UsageStats,
     /// Why the model stopped generating.

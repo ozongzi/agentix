@@ -97,6 +97,12 @@ pub enum Message {
         /// Provider-specific chain-of-thought / reasoning text, if any.
         reasoning: Option<String>,
         tool_calls: Vec<ToolCall>,
+        /// Opaque per-turn state emitted by the provider (e.g. Anthropic
+        /// thinking blocks with signatures). Populated from
+        /// [`LlmEvent::AssistantState`] and round-tripped verbatim by the
+        /// same provider's request serializer. Always `None` for providers
+        /// that don't emit state.
+        provider_data: Option<serde_json::Value>,
     },
 
     /// The result of a tool invocation, keyed by the call's ID.
@@ -133,6 +139,7 @@ impl Message {
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 tokens += 4;
                 if let Some(c) = content {
@@ -310,6 +317,28 @@ impl Provider {
     }
 }
 
+// ─── ReasoningEffort ────────────────────────────────────────────────────────
+
+/// Cross-provider hint for how much compute to spend on internal reasoning.
+///
+/// `None` explicitly disables thinking on providers that support a disable
+/// toggle (DeepSeek, Anthropic adaptive). Individual providers coerce the
+/// remaining levels to their own scale — e.g. DeepSeek only has `high`/`max`,
+/// so `Minimal/Low/Medium` collapse to `High` and `XHigh` collapses to `Max`;
+/// Anthropic has no `minimal`, so `Minimal` collapses to `low`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
+}
+
 // ─── ToolChoice ─────────────────────────────────────────────────────────────
 
 /// Provider-agnostic tool selection hint.
@@ -367,6 +396,10 @@ pub struct Request {
     pub temperature: Option<f32>,
     /// Maximum tokens to generate.
     pub max_tokens: Option<u32>,
+    /// Reasoning effort hint. `None` means leave provider default in place;
+    /// `Some(ReasoningEffort::None)` explicitly disables thinking on providers
+    /// that support it.
+    pub reasoning_effort: Option<ReasoningEffort>,
     /// Constrain the output format.
     pub response_format: Option<ResponseFormat>,
     /// Arbitrary extra top-level JSON fields merged into the provider's
@@ -397,6 +430,7 @@ impl Request {
             tools: Vec::new(),
             tool_choice: None,
             temperature: None,
+            reasoning_effort: None,
             max_tokens: None,
             response_format: None,
             extra_body: serde_json::Map::new(),
@@ -516,6 +550,13 @@ impl Request {
     /// Set the max tokens.
     pub fn max_tokens(mut self, n: u32) -> Self {
         self.max_tokens = Some(n);
+        self
+    }
+
+    /// Set the reasoning-effort hint. `ReasoningEffort::None` explicitly
+    /// disables thinking on providers that support the toggle.
+    pub fn reasoning_effort(mut self, e: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(e);
         self
     }
 
@@ -747,6 +788,7 @@ impl Request {
             reminder: self.reminder.clone(),
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            reasoning_effort: self.reasoning_effort,
             extra_body: self.extra_body.clone(),
             response_format: self.response_format.clone(),
             max_retries: self.max_retries,
@@ -769,6 +811,7 @@ mod truncate_tests {
             content: Some(s.repeat(200)),
             reasoning: None,
             tool_calls: vec![],
+            provider_data: None,
         }
     }
     fn assistant_tc(ids: &[&str]) -> Message {
@@ -783,6 +826,7 @@ mod truncate_tests {
                     arguments: "{}".to_string(),
                 })
                 .collect(),
+            provider_data: None,
         }
     }
     fn tool_result(id: &str) -> Message {

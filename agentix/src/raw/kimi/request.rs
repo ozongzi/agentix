@@ -112,6 +112,7 @@ pub(crate) fn build_kimi_request(
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 messages.push(KimiMessage::Assistant {
                     content,

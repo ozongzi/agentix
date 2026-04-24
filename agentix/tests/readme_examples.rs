@@ -52,6 +52,7 @@ fn builder_methods() {
         content: Some("hi".into()),
         reasoning: None,
         tool_calls: vec![],
+        provider_data: None,
     };
 
     let req = Request::new(Provider::DeepSeek, "sk-...")

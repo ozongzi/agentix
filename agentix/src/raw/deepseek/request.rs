@@ -2,7 +2,7 @@ use serde::Serialize;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ToolChoice, UserContent};
+use crate::request::{ImageData, Message, ReasoningEffort, ToolChoice, UserContent};
 
 #[derive(Debug, Serialize)]
 pub struct Request {
@@ -15,13 +15,58 @@ pub struct Request {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<crate::raw::shared::ResponseFormat>,
     #[serde(flatten)]
+    pub mode: ReasoningMode,
+    #[serde(flatten)]
     pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+/// Either-or payload: thinking mode forbids sampling params; non-thinking
+/// mode forbids `reasoning_effort`. Encoding both groups as an enum makes
+/// it unrepresentable to emit them in the same request body.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ReasoningMode {
+    Thinking {
+        thinking: ThinkingToggle,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_effort: Option<DsEffort>,
+    },
+    Standard {
+        thinking: ThinkingToggle,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        temperature: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        top_p: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        presence_penalty: Option<f32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        frequency_penalty: Option<f32>,
+    },
+}
+
+#[derive(Debug, Serialize)]
+pub struct ThinkingToggle {
+    #[serde(rename = "type")]
+    pub mode: ThinkingMode,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingMode {
+    Enabled,
+    Disabled,
+}
+
+/// DeepSeek exposes only two effort levels.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DsEffort {
+    High,
+    Max,
 }
 
 #[derive(Debug, Serialize)]
@@ -97,7 +142,6 @@ pub(crate) fn build_deepseek_request(
     tool_choice: Option<ToolChoice>,
     stream: bool,
 ) -> Request {
-    let history = prepare_history(history);
     let mut messages = Vec::new();
     if let Some(s) = &config.system_prompt
         && !s.is_empty()
@@ -113,6 +157,7 @@ pub(crate) fn build_deepseek_request(
                 content,
                 reasoning,
                 tool_calls,
+                ..
             } => {
                 messages.push(DsMessage::Assistant {
                     content,
@@ -182,42 +227,54 @@ pub(crate) fn build_deepseek_request(
         tools: tools_opt,
         tool_choice,
         stream: Some(stream),
-        temperature: config.temperature,
         max_tokens: config.max_tokens,
         response_format: config
             .response_format
             .clone()
             .map(crate::raw::shared::ResponseFormat::from),
+        mode: reasoning_mode(config),
         extra_body: extra,
     }
 }
 
-// DeepSeek-reasoner requires reasoning_content on assistant turns that produced
-// tool calls, and forbids it on turns that didn't. Strip accordingly before
-// serializing history back to the API.
-fn prepare_history(messages: Vec<Message>) -> Vec<Message> {
-    messages
-        .into_iter()
-        .map(|m| match m {
-            Message::Assistant {
-                content,
-                reasoning,
-                tool_calls,
-            } => {
-                let has_tools = !tool_calls.is_empty();
-                Message::Assistant {
-                    content,
-                    reasoning: if has_tools {
-                        Some(reasoning.unwrap_or_default())
-                    } else {
-                        None
-                    },
-                    tool_calls,
-                }
-            }
-            other => other,
-        })
-        .collect()
+// DeepSeek's thinking mode (default on) silently ignores sampling params, and
+// non-thinking mode ignores `reasoning_effort`. Picking the enum variant up
+// front guarantees only the compatible set reaches the wire.
+fn reasoning_mode(config: &AgentConfig) -> ReasoningMode {
+    // `ReasoningEffort::None` is the single switch for "disable thinking";
+    // any other value (or unset) uses Thinking mode, matching DeepSeek's
+    // default-on behaviour.
+    if matches!(config.reasoning_effort, Some(ReasoningEffort::None)) {
+        ReasoningMode::Standard {
+            thinking: ThinkingToggle {
+                mode: ThinkingMode::Disabled,
+            },
+            temperature: config.temperature,
+            top_p: None,
+            presence_penalty: None,
+            frequency_penalty: None,
+        }
+    } else {
+        if config.temperature.is_some() {
+            tracing::warn!(
+                "DeepSeek thinking mode ignores temperature; use reasoning_effort(None) to enable sampling params"
+            );
+        }
+        let effort = config.reasoning_effort.and_then(|e| match e {
+            ReasoningEffort::None => None,
+            ReasoningEffort::Minimal
+            | ReasoningEffort::Low
+            | ReasoningEffort::Medium
+            | ReasoningEffort::High => Some(DsEffort::High),
+            ReasoningEffort::XHigh | ReasoningEffort::Max => Some(DsEffort::Max),
+        });
+        ReasoningMode::Thinking {
+            thinking: ThinkingToggle {
+                mode: ThinkingMode::Enabled,
+            },
+            reasoning_effort: effort,
+        }
+    }
 }
 
 fn user_content_from_parts(parts: Vec<UserContent>) -> UserMessageContent {

@@ -140,6 +140,7 @@ pub fn agent(
             let mut reply_buf = String::new();
             let mut reasoning_buf = String::new();
             let mut tool_calls_buf: Vec<ToolCall> = Vec::new();
+            let mut provider_state: Option<serde_json::Value> = None;
 
             // ── Consume LLM stream ────────────────────────────────────
             loop {
@@ -163,6 +164,10 @@ pub fn agent(
                     Some(LlmEvent::ToolCall(tc)) => {
                         yield AgentEvent::ToolCallStart(tc.clone());
                         tool_calls_buf.push(tc);
+                    }
+
+                    Some(LlmEvent::AssistantState(v)) => {
+                        provider_state = Some(v);
                     }
 
                     Some(LlmEvent::Usage(u)) => {
@@ -194,6 +199,7 @@ pub fn agent(
                 content: if reply_buf.is_empty() { None } else { Some(reply_buf.clone()) },
                 reasoning: if has_reasoning { Some(reasoning_buf) } else { None },
                 tool_calls: tool_calls_buf.clone(),
+                provider_data: provider_state,
             };
             if !reply_buf.is_empty() || has_reasoning || !tool_calls_buf.is_empty() {
                 history.push(assistant_msg);
@@ -325,8 +331,9 @@ pub fn agent_turns(
 
             history.push(Message::Assistant {
                 content: response.content.clone(),
-                reasoning: None,
+                reasoning: response.reasoning.clone(),
                 tool_calls: tool_calls.clone(),
+                provider_data: response.provider_data.clone(),
             });
 
             yield Ok(response);

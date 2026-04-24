@@ -1,21 +1,23 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, UserContent};
+use crate::request::{ImageData, Message, ReasoningEffort, UserContent};
 
 // ── Cache control ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CacheControl {
     #[serde(rename = "type")]
-    pub kind: &'static str,
+    pub kind: String,
 }
 
 impl CacheControl {
     fn ephemeral() -> Self {
-        CacheControl { kind: "ephemeral" }
+        CacheControl {
+            kind: "ephemeral".to_string(),
+        }
     }
 }
 
@@ -47,6 +49,33 @@ pub struct Request {
     pub stream: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<OutputConfig>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ThinkingConfig {
+    Adaptive,
+    Disabled,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OutputConfig {
+    pub effort: AnthropicEffort,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AnthropicEffort {
+    Low,
+    Medium,
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+    Max,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,7 +91,7 @@ pub enum MessageContent {
     Blocks(Vec<ContentBlock>),
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text {
@@ -74,6 +103,14 @@ pub enum ContentBlock {
         source: ImageSource,
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
+    },
+    Thinking {
+        thinking: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        data: String,
     },
     ToolUse {
         id: String,
@@ -92,21 +129,21 @@ pub enum ContentBlock {
 
 /// Content payload for a `tool_result` block.
 /// Anthropic accepts either a plain string or an array of text/image parts.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum ToolResultContent {
     Text(String),
     Parts(Vec<ToolResultPart>),
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolResultPart {
     Text { text: String },
     Image { source: ImageSource },
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
     Base64 { media_type: String, data: String },
@@ -172,6 +209,7 @@ pub(crate) fn build_anthropic_request(
             Message::Assistant {
                 content,
                 tool_calls,
+                provider_data,
                 ..
             } => {
                 if !pending_tool_results.is_empty() {
@@ -180,7 +218,25 @@ pub(crate) fn build_anthropic_request(
                         content: MessageContent::Blocks(std::mem::take(&mut pending_tool_results)),
                     });
                 }
-                if tool_calls.is_empty() {
+                // If we have provider_data from a previous Anthropic turn with
+                // thinking+tool_use, it's the authoritative wire form — emit
+                // it verbatim to preserve thinking-block ordering relative to
+                // tool_use blocks (required by Anthropic's signature check).
+                if let Some(blocks) = provider_data
+                    .as_ref()
+                    .and_then(|v| v.get("anthropic_content"))
+                    .and_then(|v| v.as_array())
+                    .filter(|a| !a.is_empty())
+                {
+                    let parsed: Vec<ContentBlock> = blocks
+                        .iter()
+                        .filter_map(|b| serde_json::from_value(b.clone()).ok())
+                        .collect();
+                    out_messages.push(RequestMessage {
+                        role: "assistant",
+                        content: MessageContent::Blocks(parsed),
+                    });
+                } else if tool_calls.is_empty() {
                     out_messages.push(RequestMessage {
                         role: "assistant",
                         content: MessageContent::Text(content.clone().unwrap_or_default()),
@@ -285,6 +341,8 @@ pub(crate) fn build_anthropic_request(
             }]
         });
 
+    let (thinking, output_config) = anthropic_thinking(config.reasoning_effort);
+
     Request {
         model: config.model.clone(),
         max_tokens: config.max_tokens.unwrap_or(32_768),
@@ -294,6 +352,35 @@ pub(crate) fn build_anthropic_request(
         tool_choice,
         stream: Some(stream),
         temperature: config.temperature,
+        thinking,
+        output_config,
+    }
+}
+
+/// Translate the cross-provider `ReasoningEffort` into Anthropic's
+/// `thinking` + `output_config.effort` pair. `None` (unset) emits neither
+/// field, leaving the model's default in place.
+fn anthropic_thinking(
+    effort: Option<ReasoningEffort>,
+) -> (Option<ThinkingConfig>, Option<OutputConfig>) {
+    match effort {
+        None => (None, None),
+        Some(ReasoningEffort::None) => (Some(ThinkingConfig::Disabled), None),
+        Some(e) => {
+            let anth = match e {
+                ReasoningEffort::None => unreachable!(),
+                // Anthropic has no `minimal`; coerce down to `low`.
+                ReasoningEffort::Minimal | ReasoningEffort::Low => AnthropicEffort::Low,
+                ReasoningEffort::Medium => AnthropicEffort::Medium,
+                ReasoningEffort::High => AnthropicEffort::High,
+                ReasoningEffort::XHigh => AnthropicEffort::XHigh,
+                ReasoningEffort::Max => AnthropicEffort::Max,
+            };
+            (
+                Some(ThinkingConfig::Adaptive),
+                Some(OutputConfig { effort: anth }),
+            )
+        }
     }
 }
 
@@ -414,6 +501,8 @@ fn set_cache_control(block: &mut ContentBlock) {
         | ContentBlock::ToolResult { cache_control, .. } => {
             *cache_control = Some(CacheControl::ephemeral());
         }
+        // Thinking blocks don't take cache_control; skip silently.
+        ContentBlock::Thinking { .. } | ContentBlock::RedactedThinking { .. } => {}
     }
 }
 
@@ -469,6 +558,7 @@ mod tests {
                 content: Some("A".into()),
                 reasoning: None,
                 tool_calls: vec![],
+                provider_data: None,
             },
             Message::User(vec![Content::text("Second")]),
         ];
@@ -517,6 +607,84 @@ mod tests {
         assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
         assert_eq!(blocks[1]["text"], "<runtime_context>plan</runtime_context>");
         assert!(blocks[1]["cache_control"].is_null());
+    }
+
+    #[test]
+    fn reasoning_effort_none_emits_thinking_disabled() {
+        let mut config = cfg("S");
+        config.reasoning_effort = Some(ReasoningEffort::None);
+        let req = build_anthropic_request(&config, &[], &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["thinking"]["type"], "disabled");
+        assert!(json["output_config"].is_null());
+    }
+
+    #[test]
+    fn reasoning_effort_high_emits_adaptive_with_effort() {
+        let mut config = cfg("S");
+        config.reasoning_effort = Some(ReasoningEffort::High);
+        let req = build_anthropic_request(&config, &[], &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["thinking"]["type"], "adaptive");
+        assert_eq!(json["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn reasoning_effort_minimal_collapses_to_low() {
+        let mut config = cfg("S");
+        config.reasoning_effort = Some(ReasoningEffort::Minimal);
+        let req = build_anthropic_request(&config, &[], &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["output_config"]["effort"], "low");
+    }
+
+    #[test]
+    fn no_reasoning_effort_omits_thinking_field() {
+        let req = build_anthropic_request(&cfg("S"), &[], &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json["thinking"].is_null());
+        assert!(json["output_config"].is_null());
+    }
+
+    #[test]
+    fn provider_data_anthropic_content_is_emitted_verbatim() {
+        // Simulate a previous assistant turn with interleaved thinking +
+        // tool_use. On round-trip, Anthropic requires this exact ordering.
+        let pd = serde_json::json!({
+            "anthropic_content": [
+                {"type": "thinking", "thinking": "step 1", "signature": "sig-A"},
+                {"type": "tool_use", "id": "tu_1", "name": "x", "input": {"q": "a"}},
+                {"type": "thinking", "thinking": "step 2", "signature": "sig-B"},
+                {"type": "tool_use", "id": "tu_2", "name": "x", "input": {"q": "b"}},
+            ]
+        });
+        let msgs = vec![
+            Message::User(vec![Content::text("hi")]),
+            Message::Assistant {
+                content: Some("ignored".into()),
+                reasoning: Some("ignored".into()),
+                tool_calls: vec![crate::request::ToolCall {
+                    id: "ignored".into(),
+                    name: "ignored".into(),
+                    arguments: "{}".into(),
+                }],
+                provider_data: Some(pd),
+            },
+        ];
+        let req = build_anthropic_request(&cfg("S"), &msgs, &[], false);
+        let json = serde_json::to_value(&req).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+        let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
+        let blocks = assistant["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 4);
+        assert_eq!(blocks[0]["type"], "thinking");
+        assert_eq!(blocks[0]["signature"], "sig-A");
+        assert_eq!(blocks[1]["type"], "tool_use");
+        assert_eq!(blocks[1]["id"], "tu_1");
+        assert_eq!(blocks[2]["type"], "thinking");
+        assert_eq!(blocks[2]["signature"], "sig-B");
+        assert_eq!(blocks[3]["type"], "tool_use");
+        assert_eq!(blocks[3]["id"], "tu_2");
     }
 
     #[test]

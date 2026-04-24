@@ -21,6 +21,11 @@ pub enum ResponseBlock {
     },
     Thinking {
         thinking: String,
+        #[serde(default)]
+        signature: Option<String>,
+    },
+    RedactedThinking {
+        data: String,
     },
 }
 
@@ -86,6 +91,7 @@ pub enum ContentBlockStart {
     Text { text: String },
     ToolUse { id: String, name: String },
     Thinking { thinking: String },
+    RedactedThinking { data: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +100,7 @@ pub enum ContentBlockDelta {
     TextDelta { text: String },
     InputJsonDelta { partial_json: String },
     ThinkingDelta { thinking: String },
+    SignatureDelta { signature: String },
 }
 
 #[derive(Debug, Deserialize)]

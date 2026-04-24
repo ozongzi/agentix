@@ -234,11 +234,12 @@ println!("usage: {:?}", resp.usage);
 
 ```rust
 let req = Request::new(Provider::DeepSeek, "sk-...")
-    .model("deepseek-reasoner")
+    .model("deepseek-v4-pro")
     .base_url("https://custom.api/v1")
     .system_prompt("You are helpful.")
     .max_tokens(4096)
     .temperature(0.7)
+    .reasoning_effort(ReasoningEffort::High)
     .retries(5, 2000)           // max retries, initial delay ms
     .user("Hello!")             // convenience for adding a user message
     .message(msg)               // add any Message variant
@@ -248,12 +249,47 @@ let req = Request::new(Provider::DeepSeek, "sk-...")
 
 ---
 
+## Reasoning control (`ReasoningEffort`)
+
+A single cross-provider dial for "how much should the model think". Providers that expose a thinking toggle and/or effort level map this to their own wire format; providers that don't, ignore it.
+
+```rust
+use agentix::{Request, ReasoningEffort};
+
+let req = Request::deepseek(key)
+    .reasoning_effort(ReasoningEffort::Max)    // maximum effort
+    .user("Prove that there are infinitely many primes.");
+```
+
+| Variant   | DeepSeek                                          | Anthropic (Claude 4.6+)           | OpenAI / Grok / others    |
+|-----------|---------------------------------------------------|-----------------------------------|---------------------------|
+| `None`    | `thinking.type: disabled` (sampling params valid) | `thinking.type: disabled`         | ignored                   |
+| `Minimal` | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `low`          | ignored                   |
+| `Low`     | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `low`          | ignored                   |
+| `Medium`  | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `medium`       | ignored                   |
+| `High`    | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `high`         | ignored                   |
+| `XHigh`   | `thinking.type: enabled`, effort `max`            | `adaptive`, effort `xhigh`        | ignored                   |
+| `Max`     | `thinking.type: enabled`, effort `max`            | `adaptive`, effort `max`          | ignored                   |
+| unset     | no `thinking` field (provider default)            | no `thinking` field (off default) | no field                  |
+
+Notes:
+- **`None` vs unset matter.** `None` emits an explicit `disabled` toggle (and lets sampling params like `temperature` flow through on DeepSeek). Leaving it unset means "don't touch the field" and accepts the provider's own default — which for DeepSeek is **thinking on** and for Anthropic is **thinking off**.
+- **DeepSeek forbids sampling params in thinking mode**; setting `.temperature()` while thinking is on drops temperature before the wire with a `tracing::warn!`. Use `.reasoning_effort(ReasoningEffort::None)` to re-enable sampling.
+- **Anthropic round-trip for thinking + tool use** is automatic: thinking blocks (with signatures) are captured in `Message::Assistant.provider_data` and re-emitted verbatim on the next turn, preserving the interleaved `[thinking, tool_use, thinking, tool_use]` ordering that the API verifies.
+
+See `examples/11_reasoning.rs` for a live comparison of the four states.
+
+---
+
 ## LlmEvent (what you receive from `stream()`)
 
+`LlmEvent` is `#[non_exhaustive]`; always include a wildcard `_ => {}` arm to stay forward-compatible.
+
 - `Token(String)` — incremental response text
-- `Reasoning(String)` — thinking/reasoning trace (e.g. DeepSeek-R1)
+- `Reasoning(String)` — thinking/reasoning trace (e.g. DeepSeek, Claude extended thinking)
 - `ToolCallChunk(ToolCallChunk)` — partial tool call for real-time UI
 - `ToolCall(ToolCall)` — completed tool call
+- `AssistantState(serde_json::Value)` — opaque per-turn provider state (e.g. Anthropic thinking blocks with signatures). The agent loop attaches it to `Message::Assistant.provider_data` for round-trip; most user code can ignore it.
 - `Usage(UsageStats)` — token usage for the turn
 - `Done` — stream ended
 - `Error(String)` — provider error

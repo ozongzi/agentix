@@ -286,6 +286,7 @@ pub(crate) async fn write_fake_session(
                 content,
                 reasoning: _,
                 tool_calls,
+                provider_data: _,
             } => {
                 let has_tool_calls = !tool_calls.is_empty();
                 let mut blocks = Vec::new();
