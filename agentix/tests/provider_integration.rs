@@ -86,7 +86,8 @@ struct CaptureState {
 }
 
 async fn handle_capture(State(state): State<CaptureState>, body: String) -> Response {
-    let parsed = serde_json::from_str(&body).unwrap_or_else(|_| serde_json::Value::String(body));
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
     *state.body.lock().unwrap() = Some(parsed);
     Response::builder()
         .status(200)
@@ -239,6 +240,37 @@ mod openai {
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].name, "get_weather");
         assert_eq!(resp.tool_calls[0].id, "call_abc123");
+        // Reasoning tokens from output_tokens_details.
+        assert_eq!(resp.usage.reasoning_tokens, 3);
+        // provider_data captures the full output[] (reasoning + function_call)
+        // verbatim — includes encrypted_content for next-turn round-trip.
+        let pd = resp
+            .provider_data
+            .as_ref()
+            .expect("reasoning+tool_call turn must emit provider_data");
+        let items = pd["openai_responses_items"]
+            .as_array()
+            .expect("envelope must carry an array");
+        assert_eq!(items[0]["type"], "reasoning");
+        assert_eq!(items[0]["encrypted_content"], "ENC_OPAQUE_1");
+        assert_eq!(items[1]["type"], "function_call");
+    }
+
+    #[tokio::test]
+    async fn stream_reasoning_without_tool_does_not_emit_state() {
+        let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_reasoning.sse"))).await;
+        let events: Vec<_> = req(&url).stream(&http()).await.unwrap().collect().await;
+
+        assert_eq!(collect_reasoning(&events), "Let me think about this...");
+        assert_eq!(collect_tokens(&events), "The answer is 42.");
+        // Gate closed: pure reasoning→message turn, no function_call → no
+        // round-trip needed.
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, LlmEvent::AssistantState(_))),
+            "pure reasoning turn must not emit AssistantState"
+        );
     }
 }
 
@@ -258,7 +290,10 @@ mod deepseek {
 
     #[tokio::test]
     async fn stream_text() {
-        let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_text.sse"))).await;
+        let url = start_mock(MockBehaviour::Sse(fixture(
+            "chat_completions/stream_text.sse",
+        )))
+        .await;
         let events: Vec<_> = req(&url).stream(&http()).await.unwrap().collect().await;
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
@@ -267,7 +302,10 @@ mod deepseek {
 
     #[tokio::test]
     async fn stream_reasoning() {
-        let url = start_mock(MockBehaviour::Sse(fixture("openai/stream_reasoning.sse"))).await;
+        let url = start_mock(MockBehaviour::Sse(fixture(
+            "chat_completions/stream_reasoning.sse",
+        )))
+        .await;
         let events: Vec<_> = req(&url)
             .user("q")
             .stream(&http())
@@ -282,7 +320,10 @@ mod deepseek {
 
     #[tokio::test]
     async fn complete_text() {
-        let url = start_mock(MockBehaviour::Json(fixture("openai/complete_text.json"))).await;
+        let url = start_mock(MockBehaviour::Json(fixture(
+            "chat_completions/complete_text.json",
+        )))
+        .await;
         let resp = req(&url).user("q").complete(&http()).await.unwrap();
 
         assert_eq!(
@@ -507,6 +548,36 @@ mod gemini {
         );
         assert_eq!(resp.usage.total_tokens, 17);
     }
+
+    #[tokio::test]
+    async fn complete_thinking_tool_call_captures_signatures() {
+        let url = start_mock(MockBehaviour::Json(fixture(
+            "gemini/complete_thinking_tool_call.json",
+        )))
+        .await;
+        let resp = Request::new(Provider::Gemini, "test-key")
+            .base_url(&url)
+            .model("gemini-3-pro")
+            .user("weather?")
+            .complete(&http())
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.reasoning.as_deref(),
+            Some("I need to check the weather for Paris.")
+        );
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].name, "get_weather");
+        assert_eq!(resp.usage.reasoning_tokens, 4);
+        let pd = resp
+            .provider_data
+            .as_ref()
+            .expect("thinking+tool_call must emit provider_data");
+        let parts = pd["gemini_parts"].as_array().expect("array");
+        assert_eq!(parts[0]["thoughtSignature"], "THOUGHT_SIG_A");
+        assert_eq!(parts[1]["thoughtSignature"], "FUNC_CALL_SIG_A");
+        assert_eq!(parts[1]["functionCall"]["name"], "get_weather");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -518,15 +589,17 @@ mod edge_cases {
 
     #[tokio::test]
     async fn slow_sse_still_delivers_all_tokens() {
+        // Chat Completions edge case — exercised on OpenRouter (which keeps
+        // that wire format). `Provider::OpenAI` now speaks Responses API.
         let url = start_mock(MockBehaviour::SlowSse {
-            body: fixture("openai/stream_text.sse"),
+            body: fixture("chat_completions/stream_text.sse"),
             chunk_delay: Duration::from_millis(20),
         })
         .await;
 
-        let events: Vec<_> = Request::new(Provider::OpenAI, "test-key")
+        let events: Vec<_> = Request::new(Provider::OpenRouter, "test-key")
             .base_url(&url)
-            .model("gpt-test")
+            .model("openai/gpt-4o")
             .user("hi")
             .stream(&http())
             .await
@@ -616,10 +689,11 @@ mod edge_cases {
 
     #[tokio::test]
     async fn malformed_sse_chunk_is_skipped() {
+        // Chat Completions edge case — use OpenRouter which keeps that wire.
         let body = "data: {\"bad json\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\ndata: [DONE]\n\n";
         let url = start_mock(MockBehaviour::Sse(body.into())).await;
 
-        let events: Vec<_> = Request::new(Provider::OpenAI, "key")
+        let events: Vec<_> = Request::new(Provider::OpenRouter, "key")
             .base_url(&url)
             .user("hi")
             .stream(&http())
@@ -638,7 +712,7 @@ mod edge_cases {
             r#"{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1}}"#;
         let url = start_mock(MockBehaviour::Json(body.into())).await;
 
-        let resp = Request::new(Provider::OpenAI, "key")
+        let resp = Request::new(Provider::OpenRouter, "key")
             .base_url(&url)
             .user("hi")
             .complete(&http())

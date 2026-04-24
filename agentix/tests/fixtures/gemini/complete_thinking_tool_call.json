@@ -1,0 +1,29 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "I need to check the weather for Paris.",
+            "thought": true,
+            "thoughtSignature": "THOUGHT_SIG_A"
+          },
+          {
+            "functionCall": {
+              "name": "get_weather",
+              "args": {"city": "Paris"}
+            },
+            "thoughtSignature": "FUNC_CALL_SIG_A"
+          }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 12,
+    "candidatesTokenCount": 15,
+    "totalTokenCount": 27,
+    "thoughtsTokenCount": 4
+  }
+}

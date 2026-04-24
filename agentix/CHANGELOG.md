@@ -2,6 +2,55 @@
 
 ---
 
+## [0.21.0] - 2026-04-25
+
+### Summary
+
+Opaque reasoning round-trip now wired end-to-end for **OpenAI** (switched to Responses API), **Gemini** (`thoughtSignature`), and **OpenRouter** (`reasoning_details[]`). All three plug into the `provider_data` / `LlmEvent::AssistantState` plumbing added in 0.20.0 — no public API changes for consumers who just stream tokens and read tool calls.
+
+### New features
+
+**OpenAI — Responses API (`/v1/responses`)**
+- `Provider::OpenAI` now targets the Responses API exclusively. Stateless mode (`store: false`, `include: ["reasoning.encrypted_content"]`) — never uses `previous_response_id`.
+- `LlmEvent::Reasoning(text)` streams OpenAI's reasoning summary text (previously invisible on Chat Completions). Full CoT stays encrypted in `encrypted_content`; round-trips via `provider_data` (envelope tag `openai_responses_items`).
+- `reasoning_effort` maps to the `reasoning: {effort}` request config (`minimal/low/medium/high/xhigh`).
+- System prompt → top-level `instructions`. Structured output → `text.format`. Tools use the flat function shape. Tool choice uses the flat `{type: "function", name}` shape.
+- `UsageStats.reasoning_tokens` populated from `output_tokens_details.reasoning_tokens`.
+- Unknown output-item and SSE event types are tolerated via `#[serde(other)]` — forward-compatible with future Responses API additions.
+
+**Gemini — thinking config + `thoughtSignature` round-trip**
+- `generationConfig.thinkingConfig` wired up. Model-sniffed:
+  - `gemini-3*` → `thinkingLevel` (`minimal/low/medium/high`)
+  - `gemini-2.5*` → `thinkingBudget` (integer tokens, mapped from the enum)
+  - Other models — no thinking config emitted
+- `ResponsePart` now captures `thought: bool` and `thoughtSignature` fields. Streaming `LlmEvent::Reasoning` fires for thought parts.
+- Multi-turn round-trip: the raw `content.parts[]` array is captured into `provider_data` (envelope tag `gemini_parts`). Gemini 3 enforces `thoughtSignature` presence on the first `functionCall` part per step or 400s; agentix now always round-trips the full parts array to satisfy this.
+- `UsageStats.reasoning_tokens` populated from `usageMetadata.thoughtsTokenCount`.
+
+**OpenRouter — unified `reasoning` param + typed `reasoning_details[]` round-trip**
+- Outgoing request uses the unified `reasoning: {effort: ...}` body field (normalizes across underlying providers) instead of raw `reasoning_effort` passthrough.
+- Response parsing now captures `reasoning_details[]` (`reasoning.text` / `reasoning.summary` / `reasoning.encrypted` entry types). Plaintext reasoning still surfaces via `LlmEvent::Reasoning`.
+- Streaming reassembles fragmented `reasoning_details` entries by their `index` field (guards against LangChain #36400-style fragmentation producing malformed multi-turn requests).
+- Round-trip via `provider_data` (envelope tag `openrouter_reasoning_details`). Preserves `signature` / encrypted `data` fields the underlying provider needs.
+
+**Cross-provider: `UsageStats.reasoning_tokens`**
+- New `usize` field on `UsageStats`, populated by OpenAI, Gemini (and any future provider that reports it). `AddAssign` accumulates it across turns.
+
+### Breaking changes
+
+- **`Provider::OpenAI` no longer speaks Chat Completions.** Any OpenAI-compatible server without `/v1/responses` support (Azure legacy deployments, vLLM, LocalAI, Ollama, llama.cpp server, etc.) must migrate to `Provider::OpenRouter` with a custom `base_url`. Other in-tree providers (Grok, Kimi, GLM, MiniMax, OpenRouter, DeepSeek) are unaffected — they each speak their own Chat-Completions-compatible endpoint.
+- **`UsageStats` gains `reasoning_tokens: usize`**. Additive with default 0 — `..Default::default()` constructions are unaffected; exhaustive struct-literal constructions break until updated.
+- **OpenAI `extra_body` knobs for `frequency_penalty`/`presence_penalty`/`logit_bias`** now hit an API error (Responses API rejects them). Users needing them switch to `Provider::OpenRouter`.
+- **`raw::openai::*`** type surface rewritten for Responses API. Directly importing raw types from that module is breaking; consumers should use the public `Request`/`Message` API instead.
+
+### Test fixtures
+
+- Chat-Completions-shaped fixtures moved from `tests/fixtures/openai/` to `tests/fixtures/chat_completions/` (DeepSeek uses them).
+- New Responses-API-shaped fixtures in `tests/fixtures/openai/`.
+- New `tests/fixtures/gemini/complete_thinking_tool_call.json` exercising `thoughtSignature` round-trip.
+
+---
+
 ## [0.20.0] - 2026-04-25
 
 ### Summary

@@ -47,6 +47,7 @@ impl From<Usage> for crate::types::UsageStats {
             total_tokens: (u.input_tokens + u.output_tokens) as usize,
             cache_read_tokens: u.cache_read_input_tokens as usize,
             cache_creation_tokens: u.cache_creation_input_tokens as usize,
+            reasoning_tokens: 0,
         }
     }
 }

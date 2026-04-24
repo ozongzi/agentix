@@ -1,14 +1,27 @@
-data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_abc123","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_2","status":"in_progress","model":"gpt-5"}}
 
-data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"city\":"}}]},"finish_reason":null}]}
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_abc123","name":"get_weather","arguments":""}}
 
-data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"Tokyo\","}}]},"finish_reason":null}]}
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"{\"city\":"}
 
-data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"units\":"}}]},"finish_reason":null}]}
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"Tokyo\","}
 
-data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"celsius\"}"}}]},"finish_reason":null}]}
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"units\":"}
 
-data: {"id":"chatcmpl-tool1","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o-2024-08-06","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":20,"completion_tokens":15,"total_tokens":35}}
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"delta":"\"celsius\"}"}
 
-data: [DONE]
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_1","output_index":0,"arguments":"{\"city\":\"Tokyo\",\"units\":\"celsius\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_abc123","name":"get_weather","arguments":"{\"city\":\"Tokyo\",\"units\":\"celsius\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_2","status":"completed","output":[{"id":"fc_1","type":"function_call","call_id":"call_abc123","name":"get_weather","arguments":"{\"city\":\"Tokyo\",\"units\":\"celsius\"}"}],"usage":{"input_tokens":20,"output_tokens":15,"total_tokens":35}}}
 

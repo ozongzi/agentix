@@ -6,11 +6,14 @@
 //!   3. `High` — engage thinking at high effort.
 //!   4. `Max` — maximum effort (maps to the provider's strongest setting).
 //!
-//! Same code works against DeepSeek (`DEEPSEEK_API_KEY`) or Anthropic (`ANTHROPIC_API_KEY`);
-//! each provider translates `ReasoningEffort` to its own wire format:
-//!   - DeepSeek:  `thinking.type` + `reasoning_effort: "high" | "max"`.
-//!   - Anthropic: `thinking.type: "adaptive" | "disabled"` + `output_config.effort`.
-//!   - OpenAI / Grok / others: currently ignore the field (future work).
+//! Same code works against any of DeepSeek, Anthropic, OpenAI, Gemini, or
+//! OpenRouter; each provider translates `ReasoningEffort` to its own wire:
+//!   - DeepSeek:   `thinking.type` + `reasoning_effort: "high" | "max"`.
+//!   - Anthropic:  `thinking.type: "adaptive" | "disabled"` + `output_config.effort`.
+//!   - OpenAI:     `/v1/responses` `reasoning.effort` (minimal/low/medium/high/xhigh).
+//!   - Gemini:     `generationConfig.thinkingConfig.{thinkingLevel|thinkingBudget}`.
+//!   - OpenRouter: unified `reasoning.effort` (normalizes across underlying providers).
+//!   - Grok / Kimi / GLM / MiniMax: still ignored.
 
 use agentix::{LlmEvent, Provider, ReasoningEffort, Request};
 use futures::StreamExt;
@@ -87,5 +90,18 @@ fn pick_provider() -> Result<(Provider, String, String), Box<dyn std::error::Err
     if let Ok(k) = env::var("ANTHROPIC_API_KEY") {
         return Ok((Provider::Anthropic, k, "claude-opus-4-7".into()));
     }
-    Err("set DEEPSEEK_API_KEY or ANTHROPIC_API_KEY to run this example".into())
+    if let Ok(k) = env::var("OPENAI_API_KEY") {
+        return Ok((Provider::OpenAI, k, "gpt-5".into()));
+    }
+    if let Ok(k) = env::var("GOOGLE_API_KEY") {
+        return Ok((Provider::Gemini, k, "gemini-3-pro".into()));
+    }
+    if let Ok(k) = env::var("OPENROUTER_API_KEY") {
+        return Ok((
+            Provider::OpenRouter,
+            k,
+            "anthropic/claude-sonnet-4.6".into(),
+        ));
+    }
+    Err("set DEEPSEEK_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, or OPENROUTER_API_KEY to run this example".into())
 }

@@ -181,11 +181,16 @@ let req = Request::minimax("...");    // MiniMax — MiniMax-M2.7 (Anthropic API
 let req = Request::grok("xai-...");
 let req = Request::openrouter("sk-or-..."); // OpenRouter with prompt caching support
 
-// Custom base URL for OpenAI-compatible endpoints
-let req = Request::openai("sk-or-...")
+// For OpenAI-compatible endpoints (Azure, vLLM, LocalAI, Ollama, etc.),
+// route through `Provider::OpenRouter` with a custom base URL —
+// `Provider::OpenAI` exclusively targets `/v1/responses` and won't work
+// against servers that only speak Chat Completions.
+let req = Request::openrouter("sk-or-...")
     .base_url("https://openrouter.ai/api/v1")
     .model("openrouter/free");
 ```
+
+**OpenAI specifically** uses the [Responses API](https://platform.openai.com/docs/api-reference/responses) — reasoning summaries surface via `LlmEvent::Reasoning`, `encrypted_content` round-trips automatically for multi-turn tool loops, and `UsageStats.reasoning_tokens` tracks hidden-reasoning cost. Non-official OpenAI endpoints should use `Provider::OpenRouter`.
 
 ---
 
@@ -261,21 +266,24 @@ let req = Request::deepseek(key)
     .user("Prove that there are infinitely many primes.");
 ```
 
-| Variant   | DeepSeek                                          | Anthropic (Claude 4.6+)           | OpenAI / Grok / others    |
-|-----------|---------------------------------------------------|-----------------------------------|---------------------------|
-| `None`    | `thinking.type: disabled` (sampling params valid) | `thinking.type: disabled`         | ignored                   |
-| `Minimal` | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `low`          | ignored                   |
-| `Low`     | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `low`          | ignored                   |
-| `Medium`  | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `medium`       | ignored                   |
-| `High`    | `thinking.type: enabled`, effort `high`           | `adaptive`, effort `high`         | ignored                   |
-| `XHigh`   | `thinking.type: enabled`, effort `max`            | `adaptive`, effort `xhigh`        | ignored                   |
-| `Max`     | `thinking.type: enabled`, effort `max`            | `adaptive`, effort `max`          | ignored                   |
-| unset     | no `thinking` field (provider default)            | no `thinking` field (off default) | no field                  |
+| Variant   | DeepSeek                                   | Anthropic (Claude 4.6+)             | OpenAI (Responses API)         | Gemini 3+                    | Gemini 2.5        | OpenRouter                 | Others (Grok/Kimi/GLM) |
+|-----------|--------------------------------------------|-------------------------------------|--------------------------------|------------------------------|-------------------|----------------------------|------------------------|
+| `None`    | `thinking: disabled` (sampling valid)      | `thinking: disabled`                | omit `reasoning` (no toggle)   | `thinkingLevel: minimal`*    | `thinkingBudget: 0` | `reasoning.effort: none`  | ignored                |
+| `Minimal` | `thinking: enabled`, effort `high`         | `adaptive`, effort `low`            | `reasoning.effort: minimal`    | `thinkingLevel: minimal`     | `thinkingBudget: 512` | `reasoning.effort: minimal` | ignored                |
+| `Low`     | `thinking: enabled`, effort `high`         | `adaptive`, effort `low`            | `reasoning.effort: low`        | `thinkingLevel: low`         | `thinkingBudget: 1024` | `reasoning.effort: low`   | ignored                |
+| `Medium`  | `thinking: enabled`, effort `high`         | `adaptive`, effort `medium`         | `reasoning.effort: medium`     | `thinkingLevel: medium`      | `thinkingBudget: 4096` | `reasoning.effort: medium`| ignored                |
+| `High`    | `thinking: enabled`, effort `high`         | `adaptive`, effort `high`           | `reasoning.effort: high`       | `thinkingLevel: high`        | `thinkingBudget: 8192` | `reasoning.effort: high`  | ignored                |
+| `XHigh`   | `thinking: enabled`, effort `max`          | `adaptive`, effort `xhigh`          | `reasoning.effort: xhigh`      | `thinkingLevel: high`        | `thinkingBudget: 16384` | `reasoning.effort: xhigh`| ignored                |
+| `Max`     | `thinking: enabled`, effort `max`          | `adaptive`, effort `max`            | `reasoning.effort: high`†      | `thinkingLevel: high`        | `thinkingBudget: 24576` | `reasoning.effort: max`  | ignored                |
+| unset     | omit (default: thinking on)                | omit (default: thinking off)        | omit                           | omit                         | omit              | omit                       | no field               |
+
+\* Gemini 3 Pro can't fully disable thinking; `None` collapses to the floor (`minimal`).
+† OpenAI has no `max` variant; collapses to `high`. `xhigh` only works on `gpt-5.1-codex-max`.
 
 Notes:
-- **`None` vs unset matter.** `None` emits an explicit `disabled` toggle (and lets sampling params like `temperature` flow through on DeepSeek). Leaving it unset means "don't touch the field" and accepts the provider's own default — which for DeepSeek is **thinking on** and for Anthropic is **thinking off**.
+- **`None` vs unset matter.** `None` emits an explicit disable toggle where the provider supports one and keeps sampling params valid. Leaving it unset accepts the provider's own default — which for DeepSeek is thinking on and for most others is thinking off.
 - **DeepSeek forbids sampling params in thinking mode**; setting `.temperature()` while thinking is on drops temperature before the wire with a `tracing::warn!`. Use `.reasoning_effort(ReasoningEffort::None)` to re-enable sampling.
-- **Anthropic round-trip for thinking + tool use** is automatic: thinking blocks (with signatures) are captured in `Message::Assistant.provider_data` and re-emitted verbatim on the next turn, preserving the interleaved `[thinking, tool_use, thinking, tool_use]` ordering that the API verifies.
+- **Round-trip for thinking + tool use** is automatic on **Anthropic** (thinking blocks + signatures), **OpenAI** (`encrypted_content` reasoning items), **Gemini** (`thoughtSignature` parts), and **OpenRouter** (typed `reasoning_details[]` entries). On each of these the full opaque state is captured into `Message::Assistant.provider_data` and re-emitted verbatim on the next turn, preserving the interleaved ordering that those APIs validate against (Anthropic's signature check, OpenAI's `'function_call' was provided without its required 'reasoning' item` rule, Gemini 3's 400 on missing `thoughtSignature`).
 
 See `examples/11_reasoning.rs` for a live comparison of the four states.
 
@@ -286,11 +294,11 @@ See `examples/11_reasoning.rs` for a live comparison of the four states.
 `LlmEvent` is `#[non_exhaustive]`; always include a wildcard `_ => {}` arm to stay forward-compatible.
 
 - `Token(String)` — incremental response text
-- `Reasoning(String)` — thinking/reasoning trace (e.g. DeepSeek, Claude extended thinking)
+- `Reasoning(String)` — thinking/reasoning trace (DeepSeek `reasoning_content`, Claude thinking blocks, OpenAI reasoning summary, Gemini thought parts, OpenRouter `reasoning` / `reasoning.text` entries)
 - `ToolCallChunk(ToolCallChunk)` — partial tool call for real-time UI
 - `ToolCall(ToolCall)` — completed tool call
-- `AssistantState(serde_json::Value)` — opaque per-turn provider state (e.g. Anthropic thinking blocks with signatures). The agent loop attaches it to `Message::Assistant.provider_data` for round-trip; most user code can ignore it.
-- `Usage(UsageStats)` — token usage for the turn
+- `AssistantState(serde_json::Value)` — opaque per-turn provider state. Emitted by Anthropic (thinking blocks + signatures), OpenAI (encrypted reasoning items), Gemini (`thoughtSignature` parts), and OpenRouter (typed `reasoning_details[]`). The agent loop attaches it to `Message::Assistant.provider_data` for round-trip; most user code can ignore it.
+- `Usage(UsageStats)` — token usage for the turn (includes `reasoning_tokens` where the provider reports it)
 - `Done` — stream ended
 - `Error(String)` — provider error
 

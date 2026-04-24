@@ -66,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let path = path.trim();
             match std::fs::read(path) {
                 Ok(bytes) => {
-                    let ext = path.split('.').last().unwrap_or("jpeg");
+                    let ext = path.split('.').next_back().unwrap_or("jpeg");
                     let mime_type = format!("image/{}", ext);
 
                     user_parts.push(UserContent::Image(ImageContent {

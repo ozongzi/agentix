@@ -18,6 +18,11 @@ pub struct UsageStats {
     pub cache_read_tokens: usize,
     /// Tokens written into the provider's prompt cache (Anthropic: cache_creation_input_tokens).
     pub cache_creation_tokens: usize,
+    /// Tokens spent on internal reasoning/thinking (OpenAI Responses API:
+    /// `output_tokens_details.reasoning_tokens`; Anthropic billed-thinking
+    /// tokens if exposed; Gemini `thoughtsTokenCount`). `0` when the provider
+    /// doesn't report it or the model didn't reason.
+    pub reasoning_tokens: usize,
 }
 
 impl std::ops::AddAssign for UsageStats {
@@ -27,6 +32,7 @@ impl std::ops::AddAssign for UsageStats {
         self.total_tokens += rhs.total_tokens;
         self.cache_read_tokens += rhs.cache_read_tokens;
         self.cache_creation_tokens += rhs.cache_creation_tokens;
+        self.reasoning_tokens += rhs.reasoning_tokens;
     }
 }
 

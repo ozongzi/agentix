@@ -1,8 +1,25 @@
+//! OpenRouter provider — OpenAI-Chat-compatible proxy with a unified reasoning
+//! abstraction across underlying models.
+//!
+//! # Reasoning semantics
+//!
+//! `LlmEvent::Reasoning(text)` streams whatever plaintext reasoning OpenRouter
+//! chooses to expose — either the simple `reasoning` delta string or the
+//! `text` field of a `reasoning.text` entry within `reasoning_details`. The
+//! authoritative state for multi-turn tool loops is the entire
+//! `reasoning_details[]` array (whose entries may be `reasoning.text` /
+//! `reasoning.summary` / `reasoning.encrypted`). That round-trips via
+//! [`LlmEvent::AssistantState`] → [`Message::Assistant::provider_data`]
+//! (envelope tag `openrouter_reasoning_details`).
+
 pub mod request;
 pub mod response;
 
+use std::collections::HashMap;
+
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
+use serde_json::Value;
 use tracing::debug;
 
 use crate::config::AgentConfig;
@@ -50,7 +67,8 @@ pub(crate) async fn stream_openrouter(
 
     Ok(async_stream::stream! {
         let mut bufs = StreamBufs::new();
-        let mut sse  = resp.bytes_stream().eventsource();
+        let mut details = ReasoningDetailsAccumulator::default();
+        let mut sse = resp.bytes_stream().eventsource();
         let mut saw_done = false;
         let mut saw_finish_reason = false;
 
@@ -74,9 +92,9 @@ pub(crate) async fn stream_openrouter(
                             {
                                 saw_finish_reason = true;
                             }
-                            for lev in parse_chunk(chunk, &mut bufs) { yield lev; }
-                        },
-                        Err(e)    => debug!(data = %ev.data, error = %e, "openrouter chunk parse failed"),
+                            for lev in parse_chunk(chunk, &mut bufs, &mut details) { yield lev; }
+                        }
+                        Err(e) => debug!(data = %ev.data, error = %e, "openrouter chunk parse failed"),
                     }
                 }
                 Err(e) => { yield LlmEvent::Error(e.to_string()); break; }
@@ -85,12 +103,30 @@ pub(crate) async fn stream_openrouter(
         if !saw_done && !saw_finish_reason {
             yield LlmEvent::Error("stream ended without [DONE] or finish_reason".to_string());
         }
-        for tc in finalize(&mut bufs) { yield LlmEvent::ToolCall(tc); }
+
+        let tool_calls = finalize(&mut bufs);
+        let finalized_details = details.into_sorted();
+
+        for tc in &tool_calls { yield LlmEvent::ToolCall(tc.clone()); }
+
+        // Gate: emit round-trip state only when reasoning_details was seen
+        // AND there's a tool_call to continue from. Pure-reasoning turns are
+        // terminal; no underlying provider needs state round-trip for those.
+        if !finalized_details.is_empty() && !tool_calls.is_empty() {
+            yield LlmEvent::AssistantState(serde_json::json!({
+                "openrouter_reasoning_details": finalized_details,
+            }));
+        }
+
         yield LlmEvent::Done;
     }.boxed())
 }
 
-fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
+fn parse_chunk(
+    chunk: StreamChunk,
+    bufs: &mut StreamBufs,
+    details: &mut ReasoningDetailsAccumulator,
+) -> Vec<LlmEvent> {
     let mut events = Vec::new();
     if let Some(u) = chunk.usage {
         events.push(LlmEvent::Usage(UsageStats::from(u)));
@@ -103,6 +139,21 @@ fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
     if let Some(dtcs) = delta.tool_calls {
         for dtc in dtcs {
             events.extend(handle_tool_call_delta(dtc, bufs));
+        }
+    }
+    if let Some(reasoning_details) = delta.reasoning_details {
+        for entry in reasoning_details {
+            // Also surface plaintext reasoning fragments to the user as
+            // LlmEvent::Reasoning so streaming UIs show thinking even when
+            // the underlying provider only emits typed details.
+            if entry.get("type").and_then(|t| t.as_str()) == Some("reasoning.text")
+                && let Some(text) = entry.get("text").and_then(|t| t.as_str())
+                && !text.is_empty()
+            {
+                bufs.reasoning_buf.push_str(text);
+                events.push(LlmEvent::Reasoning(text.to_string()));
+            }
+            details.ingest(entry);
         }
     }
     if let Some(r) = delta.reasoning.filter(|s| !s.is_empty()) {
@@ -175,6 +226,65 @@ fn finalize(bufs: &mut StreamBufs) -> Vec<ToolCall> {
         .collect()
 }
 
+/// Reassembles streamed `reasoning_details` fragments.
+///
+/// Streaming often fragments a single typed entry across chunks — the naive
+/// "push each fragment" approach (LangChain #36400) produces a malformed
+/// `reasoning_details[]` on round-trip. We key by the `index` field on each
+/// entry and coalesce same-index fragments by string-appending their text /
+/// summary / data slots; entries missing `index` fall back to append order.
+#[derive(Default)]
+struct ReasoningDetailsAccumulator {
+    indexed: HashMap<u64, Value>,
+    unindexed: Vec<Value>,
+}
+
+impl ReasoningDetailsAccumulator {
+    fn ingest(&mut self, entry: Value) {
+        let index = entry.get("index").and_then(|i| i.as_u64());
+        match index {
+            Some(idx) => match self.indexed.get_mut(&idx) {
+                Some(existing) => merge_reasoning_entry(existing, &entry),
+                None => {
+                    self.indexed.insert(idx, entry);
+                }
+            },
+            None => self.unindexed.push(entry),
+        }
+    }
+
+    fn into_sorted(self) -> Vec<Value> {
+        let mut entries: Vec<(u64, Value)> = self.indexed.into_iter().collect();
+        entries.sort_by_key(|(i, _)| *i);
+        let mut out: Vec<Value> = entries.into_iter().map(|(_, v)| v).collect();
+        out.extend(self.unindexed);
+        out
+    }
+}
+
+fn merge_reasoning_entry(existing: &mut Value, delta: &Value) {
+    // Append text-like payload fields, otherwise overwrite scalar identity
+    // fields (id / format / type stay stable across fragments).
+    for key in ["text", "summary", "data"] {
+        if let Some(delta_val) = delta.get(key).and_then(|v| v.as_str()) {
+            let current = existing.get(key).and_then(|v| v.as_str()).unwrap_or("");
+            let merged = format!("{current}{delta_val}");
+            if let Some(obj) = existing.as_object_mut() {
+                obj.insert(key.to_string(), Value::String(merged));
+            }
+        }
+    }
+    // Copy over any field the existing entry doesn't yet have (e.g. late
+    // arrival of `signature` or `id`).
+    if let (Some(dobj), Some(eobj)) = (delta.as_object(), existing.as_object_mut()) {
+        for (k, v) in dobj {
+            if !eobj.contains_key(k) {
+                eobj.insert(k.clone(), v.clone());
+            }
+        }
+    }
+}
+
 // ── Non-streaming (complete) ──────────────────────────────────────────────────
 
 pub(crate) async fn complete_openrouter(
@@ -217,24 +327,86 @@ pub(crate) async fn complete_openrouter(
         .map(FinishReason::from);
     let msg = choice.map(|c| c.message);
 
+    let reasoning_details = msg.as_ref().and_then(|m| m.reasoning_details.clone());
+    let tool_calls: Vec<ToolCall> = msg
+        .as_ref()
+        .and_then(|m| m.tool_calls.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tc| ToolCall {
+            id: tc.id,
+            name: tc.function.name,
+            arguments: tc.function.arguments,
+        })
+        .collect();
+
+    // Gate matches streaming path.
+    let provider_data = reasoning_details
+        .as_ref()
+        .filter(|d| !d.is_empty() && !tool_calls.is_empty())
+        .map(|d| {
+            serde_json::json!({
+                "openrouter_reasoning_details": d,
+            })
+        });
+
     Ok(CompleteResponse {
         content: msg.as_ref().and_then(|m| m.content.clone()),
         reasoning: msg.as_ref().and_then(|m| m.reasoning.clone()),
-        tool_calls: msg
-            .map(|m| {
-                m.tool_calls
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|tc| ToolCall {
-                        id: tc.id,
-                        name: tc.function.name,
-                        arguments: tc.function.arguments,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        provider_data: None,
+        tool_calls,
+        provider_data,
         usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
         finish_reason: finish_reason.unwrap_or_default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_details_fragments_coalesce_by_index() {
+        // Simulates the LangChain #36400 scenario: two text fragments for
+        // index 0 and one encrypted entry for index 1 arriving across chunks.
+        let mut acc = ReasoningDetailsAccumulator::default();
+        acc.ingest(serde_json::json!({
+            "type": "reasoning.text",
+            "index": 0,
+            "format": "anthropic-claude-v1",
+            "text": "Let me"
+        }));
+        acc.ingest(serde_json::json!({
+            "type": "reasoning.text",
+            "index": 0,
+            "text": " think."
+        }));
+        acc.ingest(serde_json::json!({
+            "type": "reasoning.encrypted",
+            "index": 1,
+            "format": "openai-responses-v1",
+            "data": "ENC_BLOB"
+        }));
+        acc.ingest(serde_json::json!({
+            "type": "reasoning.text",
+            "index": 0,
+            "signature": "SIG_AFTER_TEXT"
+        }));
+        let out = acc.into_sorted();
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["text"], "Let me think.");
+        assert_eq!(out[0]["format"], "anthropic-claude-v1");
+        // Signature arrived after the text; merger added it without overwrite.
+        assert_eq!(out[0]["signature"], "SIG_AFTER_TEXT");
+        assert_eq!(out[1]["type"], "reasoning.encrypted");
+        assert_eq!(out[1]["data"], "ENC_BLOB");
+    }
+
+    #[test]
+    fn unindexed_entries_fall_through() {
+        let mut acc = ReasoningDetailsAccumulator::default();
+        acc.ingest(serde_json::json!({"type": "reasoning.summary", "summary": "brief"}));
+        let out = acc.into_sorted();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["summary"], "brief");
+    }
 }

@@ -1,8 +1,9 @@
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, ToolChoice, UserContent};
+use crate::request::{ImageData, Message, ReasoningEffort, ToolChoice, UserContent};
 
 #[derive(Debug, Serialize)]
 pub struct Request {
@@ -20,8 +21,18 @@ pub struct Request {
     pub max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<crate::raw::shared::ResponseFormat>,
+    /// OpenRouter's unified reasoning control — normalizes across underlying
+    /// providers. See <https://openrouter.ai/docs/guides/best-practices/reasoning-tokens>.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningParam>,
     #[serde(flatten)]
     pub extra_body: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReasoningParam {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -39,6 +50,10 @@ pub enum OaiMessage {
         content: Option<String>,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         tool_calls: Vec<ResponseToolCall>,
+        /// Opaque typed entries from a previous turn — round-tripped verbatim
+        /// so the underlying provider's reasoning/signature state survives.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_details: Option<Vec<Value>>,
     },
     Tool {
         tool_call_id: String,
@@ -132,8 +147,14 @@ pub(crate) fn build_openrouter_request(
             Message::Assistant {
                 content,
                 tool_calls,
+                provider_data,
                 ..
             } => {
+                let reasoning_details = provider_data
+                    .as_ref()
+                    .and_then(|v| v.get("openrouter_reasoning_details"))
+                    .and_then(|v| v.as_array())
+                    .cloned();
                 messages.push(OaiMessage::Assistant {
                     content,
                     tool_calls: tool_calls
@@ -147,6 +168,7 @@ pub(crate) fn build_openrouter_request(
                             },
                         })
                         .collect(),
+                    reasoning_details,
                 });
             }
             Message::ToolResult { call_id, content } => {
@@ -210,8 +232,27 @@ pub(crate) fn build_openrouter_request(
             .response_format
             .clone()
             .map(crate::raw::shared::ResponseFormat::from),
+        reasoning: openrouter_reasoning(config.reasoning_effort),
         extra_body: extra,
     }
+}
+
+/// Map the cross-provider effort enum to OpenRouter's unified
+/// `reasoning.effort`. OpenRouter normalizes across underlying providers, so
+/// we can pass through any of the standard levels. `None` omits the block
+/// entirely (underlying provider's default takes over).
+fn openrouter_reasoning(effort: Option<ReasoningEffort>) -> Option<ReasoningParam> {
+    let e = effort?;
+    let wire = match e {
+        ReasoningEffort::None => "none",
+        ReasoningEffort::Minimal => "minimal",
+        ReasoningEffort::Low => "low",
+        ReasoningEffort::Medium => "medium",
+        ReasoningEffort::High => "high",
+        ReasoningEffort::XHigh => "xhigh",
+        ReasoningEffort::Max => "max",
+    };
+    Some(ReasoningParam { effort: Some(wire) })
 }
 
 fn user_content_from_parts(parts: Vec<UserContent>) -> MessageContent {
@@ -318,5 +359,68 @@ fn set_cache_control(part: &mut ContentPart) {
         ContentPart::Text { cache_control, .. } | ContentPart::ImageUrl { cache_control, .. } => {
             *cache_control = Some(CacheControl::ephemeral());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::{Content as MsgContent, Message, ToolCall};
+
+    fn cfg() -> AgentConfig {
+        AgentConfig {
+            model: "anthropic/claude-sonnet-4.6".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn reasoning_effort_maps_to_unified_param() {
+        let mut c = cfg();
+        c.reasoning_effort = Some(ReasoningEffort::High);
+        let req = build_openrouter_request(&c, vec![], &[], None, false);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["reasoning"]["effort"], "high");
+    }
+
+    #[test]
+    fn reasoning_effort_none_maps_to_none_string() {
+        let mut c = cfg();
+        c.reasoning_effort = Some(ReasoningEffort::None);
+        let req = build_openrouter_request(&c, vec![], &[], None, false);
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(json["reasoning"]["effort"], "none");
+    }
+
+    #[test]
+    fn provider_data_attaches_reasoning_details_to_assistant() {
+        let pd = serde_json::json!({
+            "openrouter_reasoning_details": [
+                {"type": "reasoning.encrypted", "data": "ENC_A", "format": "anthropic-claude-v1"},
+                {"type": "reasoning.text", "text": "step 1", "signature": "SIG_A"}
+            ]
+        });
+        let history = vec![
+            Message::User(vec![MsgContent::text("hi")]),
+            Message::Assistant {
+                content: Some("...".into()),
+                reasoning: None,
+                tool_calls: vec![ToolCall {
+                    id: "call_1".into(),
+                    name: "x".into(),
+                    arguments: "{}".into(),
+                }],
+                provider_data: Some(pd),
+            },
+        ];
+        let req = build_openrouter_request(&cfg(), history, &[], None, false);
+        let json = serde_json::to_value(&req).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+        let assistant = messages.iter().find(|m| m["role"] == "assistant").unwrap();
+        let rd = assistant["reasoning_details"].as_array().unwrap();
+        assert_eq!(rd.len(), 2);
+        assert_eq!(rd[0]["type"], "reasoning.encrypted");
+        assert_eq!(rd[0]["data"], "ENC_A");
+        assert_eq!(rd[1]["signature"], "SIG_A");
     }
 }

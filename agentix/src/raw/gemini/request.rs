@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::config::AgentConfig;
 use crate::raw::shared::ToolDefinition;
-use crate::request::{ImageData, Message, UserContent};
+use crate::request::{ImageData, Message, ReasoningEffort, UserContent};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -36,27 +36,38 @@ pub enum Part {
     InlineData(Blob),
     FunctionCall(FunctionCall),
     FunctionResponse(FunctionResponse),
+    /// Raw opaque JSON — emitted verbatim to preserve a part captured from
+    /// a previous turn (with its `thoughtSignature`). Used when splicing
+    /// `provider_data.gemini_parts` back into contents[]. Gemini 3 rejects
+    /// turns where the signature is missing or reordered.
+    Raw(Value),
 }
 
 impl serde::Serialize for Part {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        let mut map = s.serialize_map(None)?;
         match self {
-            Part::Text(t) => {
-                map.serialize_entry("text", t)?;
-            }
-            Part::InlineData(b) => {
-                map.serialize_entry("inline_data", b)?;
-            }
-            Part::FunctionCall(fc) => {
-                map.serialize_entry("function_call", fc)?;
-            }
-            Part::FunctionResponse(fr) => {
-                map.serialize_entry("function_response", fr)?;
+            Part::Raw(v) => v.serialize(s),
+            _ => {
+                let mut map = s.serialize_map(None)?;
+                match self {
+                    Part::Text(t) => {
+                        map.serialize_entry("text", t)?;
+                    }
+                    Part::InlineData(b) => {
+                        map.serialize_entry("inline_data", b)?;
+                    }
+                    Part::FunctionCall(fc) => {
+                        map.serialize_entry("function_call", fc)?;
+                    }
+                    Part::FunctionResponse(fr) => {
+                        map.serialize_entry("function_response", fr)?;
+                    }
+                    Part::Raw(_) => unreachable!(),
+                }
+                map.end()
             }
         }
-        map.end()
     }
 }
 
@@ -116,6 +127,24 @@ pub struct GenerationConfig {
     pub response_mime_type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_schema: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_config: Option<ThinkingConfig>,
+}
+
+#[derive(Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ThinkingConfig {
+    /// Gemini 3 models accept a qualitative level.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<&'static str>,
+    /// Gemini 2.5 models want a numeric token budget (`-1` = dynamic, `0` =
+    /// disabled).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<i32>,
+    /// Ask the model to return `thought: true` parts with summarized
+    /// reasoning text. We set this whenever a thinking config is emitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_thoughts: Option<bool>,
 }
 
 pub(crate) fn build_gemini_request(
@@ -163,26 +192,45 @@ pub(crate) fn build_gemini_request(
             Message::Assistant {
                 content,
                 tool_calls,
+                provider_data,
                 ..
             } => {
-                let mut parts: Vec<Part> = Vec::new();
-                if let Some(t) = content
-                    && !t.is_empty()
+                // Prefer the raw wire form from a previous turn — it carries
+                // `thoughtSignature` on function-call parts in their original
+                // relative position. Gemini 3 400s if the signature is missing
+                // or if the ordering between thought + functionCall parts has
+                // been altered.
+                if let Some(raw_parts) = provider_data
+                    .as_ref()
+                    .and_then(|v| v.get("gemini_parts"))
+                    .and_then(|v| v.as_array())
+                    .filter(|a| !a.is_empty())
                 {
-                    parts.push(Part::Text(t.clone()));
-                }
-                for tc in tool_calls {
-                    let args = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
-                    parts.push(Part::FunctionCall(FunctionCall {
-                        name: tc.name.clone(),
-                        args,
-                    }));
-                }
-                if !parts.is_empty() {
+                    let parts: Vec<Part> = raw_parts.iter().map(|p| Part::Raw(p.clone())).collect();
                     contents.push(Content {
                         role: "model",
                         parts,
                     });
+                } else {
+                    let mut parts: Vec<Part> = Vec::new();
+                    if let Some(t) = content
+                        && !t.is_empty()
+                    {
+                        parts.push(Part::Text(t.clone()));
+                    }
+                    for tc in tool_calls {
+                        let args = serde_json::from_str(&tc.arguments).unwrap_or(Value::Null);
+                        parts.push(Part::FunctionCall(FunctionCall {
+                            name: tc.name.clone(),
+                            args,
+                        }));
+                    }
+                    if !parts.is_empty() {
+                        contents.push(Content {
+                            role: "model",
+                            parts,
+                        });
+                    }
                 }
             }
             Message::ToolResult { call_id, content } => {
@@ -264,16 +312,19 @@ pub(crate) fn build_gemini_request(
         }
         _ => (None, None),
     };
+    let thinking_config = gemini_thinking_config(config.reasoning_effort, &config.model);
     let gc = GenerationConfig {
         temperature: config.temperature,
         max_output_tokens: config.max_tokens,
         response_mime_type,
         response_schema,
+        thinking_config,
     };
     let generation_config = if gc.temperature.is_none()
         && gc.max_output_tokens.is_none()
         && gc.response_mime_type.is_none()
         && gc.response_schema.is_none()
+        && gc.thinking_config.is_none()
     {
         None
     } else {
@@ -286,6 +337,61 @@ pub(crate) fn build_gemini_request(
         tools: gemini_tools,
         tool_config,
         generation_config,
+    }
+}
+
+/// Translate the cross-provider effort into Gemini's `thinkingConfig`. The
+/// knob differs by model family:
+///
+/// - `gemini-3*` → qualitative `thinkingLevel` (`minimal`/`low`/`medium`/`high`)
+/// - `gemini-2.5*` → numeric `thinkingBudget` (`0` disabled, integer tokens)
+///
+/// Other models fall through to `None` (the caller omits the config and the
+/// model's default takes effect).
+pub(crate) fn gemini_thinking_config(
+    effort: Option<ReasoningEffort>,
+    model: &str,
+) -> Option<ThinkingConfig> {
+    let effort = effort?;
+    let is_v3 = model.starts_with("gemini-3");
+    let is_v25 = model.starts_with("gemini-2.5");
+    if !is_v3 && !is_v25 {
+        return None;
+    }
+
+    let include_thoughts = !matches!(effort, ReasoningEffort::None);
+
+    if is_v3 {
+        // Gemini 3's thinkingLevel enum. `None` → minimal (Gemini 3 Pro
+        // doesn't support fully disabling thinking; minimal is the floor).
+        let level = match effort {
+            ReasoningEffort::None | ReasoningEffort::Minimal => "minimal",
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High | ReasoningEffort::XHigh | ReasoningEffort::Max => "high",
+        };
+        Some(ThinkingConfig {
+            thinking_level: Some(level),
+            thinking_budget: None,
+            include_thoughts: Some(include_thoughts),
+        })
+    } else {
+        // Gemini 2.5 numeric budget. `None` → 0 (disabled); `Max` → a large
+        // value that models cap to their own ceiling.
+        let budget = match effort {
+            ReasoningEffort::None => 0,
+            ReasoningEffort::Minimal => 512,
+            ReasoningEffort::Low => 1024,
+            ReasoningEffort::Medium => 4096,
+            ReasoningEffort::High => 8192,
+            ReasoningEffort::XHigh => 16384,
+            ReasoningEffort::Max => 24576,
+        };
+        Some(ThinkingConfig {
+            thinking_level: None,
+            thinking_budget: Some(budget),
+            include_thoughts: Some(include_thoughts),
+        })
     }
 }
 
@@ -324,5 +430,110 @@ fn sanitize_schema_for_gemini(v: Value) -> Value {
             Value::Object(map)
         }
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::request::{Content as MsgContent, Message, ToolCall};
+
+    fn cfg(model: &str) -> AgentConfig {
+        AgentConfig {
+            model: model.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gemini_3_uses_thinking_level() {
+        let mut c = cfg("gemini-3-pro");
+        c.reasoning_effort = Some(ReasoningEffort::High);
+        let req = build_gemini_request(&c, &[], &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        let tc = &json["generationConfig"]["thinkingConfig"];
+        assert_eq!(tc["thinkingLevel"], "high");
+        assert!(tc["thinkingBudget"].is_null());
+        assert_eq!(tc["includeThoughts"], true);
+    }
+
+    #[test]
+    fn gemini_2_5_uses_thinking_budget() {
+        let mut c = cfg("gemini-2.5-pro");
+        c.reasoning_effort = Some(ReasoningEffort::Medium);
+        let req = build_gemini_request(&c, &[], &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        let tc = &json["generationConfig"]["thinkingConfig"];
+        assert!(tc["thinkingLevel"].is_null());
+        assert_eq!(tc["thinkingBudget"], 4096);
+    }
+
+    #[test]
+    fn unknown_model_omits_thinking_config() {
+        let mut c = cfg("gemini-1.5-flash");
+        c.reasoning_effort = Some(ReasoningEffort::Max);
+        let req = build_gemini_request(&c, &[], &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        // Either generationConfig is absent entirely or thinkingConfig is null.
+        assert!(
+            json["generationConfig"].is_null()
+                || json["generationConfig"]["thinkingConfig"].is_null()
+        );
+    }
+
+    #[test]
+    fn gemini_3_effort_none_emits_minimal_not_omit() {
+        // Gemini 3 Pro can't fully disable; we map None → minimal.
+        let mut c = cfg("gemini-3-pro");
+        c.reasoning_effort = Some(ReasoningEffort::None);
+        let req = build_gemini_request(&c, &[], &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        let tc = &json["generationConfig"]["thinkingConfig"];
+        assert_eq!(tc["thinkingLevel"], "minimal");
+        assert_eq!(tc["includeThoughts"], false);
+    }
+
+    #[test]
+    fn provider_data_gemini_parts_splice_in_order() {
+        // Thought-containing functionCall + text parts must survive verbatim
+        // to preserve the thoughtSignature field. Gemini 3 400s otherwise.
+        let pd = serde_json::json!({
+            "gemini_parts": [
+                {
+                    "functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+                    "thoughtSignature": "<Sig A>"
+                },
+                {
+                    "text": "calling weather tool",
+                    "thought": true
+                }
+            ]
+        });
+        let msgs = vec![
+            Message::User(vec![MsgContent::text("weather?")]),
+            Message::Assistant {
+                content: Some("ignored".into()),
+                reasoning: None,
+                tool_calls: vec![ToolCall {
+                    id: "ignored".into(),
+                    name: "ignored".into(),
+                    arguments: "{}".into(),
+                }],
+                provider_data: Some(pd),
+            },
+        ];
+        let req = build_gemini_request(&cfg("gemini-3-pro"), &msgs, &[]);
+        let json = serde_json::to_value(&req).unwrap();
+        let model_content = json["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["role"] == "model")
+            .unwrap();
+        let parts = model_content["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["thoughtSignature"], "<Sig A>");
+        assert_eq!(parts[0]["functionCall"]["name"], "get_weather");
+        assert_eq!(parts[1]["thought"], true);
     }
 }

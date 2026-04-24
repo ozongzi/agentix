@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use serde_json::Value;
 
 #[derive(Debug, Deserialize)]
 pub struct StreamChunk {
@@ -22,6 +23,12 @@ pub struct Delta {
     pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<DeltaToolCall>>,
+    /// Typed reasoning entries (`reasoning.text` / `reasoning.summary` /
+    /// `reasoning.encrypted`). Streamed fragmented across chunks — we
+    /// accumulate by the `index` field on each entry, not by append order
+    /// (see LangChain #36400 for the bug that motivates this).
+    #[serde(default)]
+    pub reasoning_details: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -95,15 +102,18 @@ pub struct CompleteMessage {
     pub reasoning: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<CompleteToolCall>>,
+    /// Typed reasoning entries preserved for round-trip.
+    #[serde(default)]
+    pub reasoning_details: Option<Vec<Value>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CompleteToolCall {
     pub id: String,
     pub function: CompleteFunctionCall,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CompleteFunctionCall {
     pub name: String,
     pub arguments: String,

@@ -1,31 +1,29 @@
 {
-  "id": "chatcmpl-tool1",
-  "object": "chat.completion",
-  "created": 1700000000,
-  "model": "gpt-4o-2024-08-06",
-  "choices": [
+  "id": "resp_2",
+  "object": "response",
+  "created_at": 1700000000,
+  "status": "completed",
+  "model": "gpt-5",
+  "output": [
     {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": null,
-        "tool_calls": [
-          {
-            "id": "call_abc123",
-            "type": "function",
-            "function": {
-              "name": "get_weather",
-              "arguments": "{\"city\":\"Tokyo\",\"units\":\"celsius\"}"
-            }
-          }
-        ]
-      },
-      "finish_reason": "tool_calls"
+      "id": "rs_1",
+      "type": "reasoning",
+      "summary": [],
+      "encrypted_content": "ENC_OPAQUE_1"
+    },
+    {
+      "id": "fc_1",
+      "type": "function_call",
+      "call_id": "call_abc123",
+      "name": "get_weather",
+      "arguments": "{\"city\":\"Tokyo\",\"units\":\"celsius\"}",
+      "status": "completed"
     }
   ],
   "usage": {
-    "prompt_tokens": 20,
-    "completion_tokens": 15,
-    "total_tokens": 35
+    "input_tokens": 20,
+    "output_tokens": 15,
+    "total_tokens": 35,
+    "output_tokens_details": {"reasoning_tokens": 3}
   }
 }

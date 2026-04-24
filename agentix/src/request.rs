@@ -638,8 +638,8 @@ impl Request {
                     .await
             }
             Provider::OpenAI => {
-                use crate::raw::openai::stream_openai_compatible;
-                stream_openai_compatible(&self.api_key, http, &config, messages, tools, None).await
+                crate::raw::openai::stream_openai(&self.api_key, http, &config, messages, tools)
+                    .await
             }
             Provider::Anthropic => {
                 crate::raw::anthropic::stream_anthropic(
@@ -716,8 +716,7 @@ impl Request {
                 .await
             }
             Provider::OpenAI => {
-                use crate::raw::openai::complete_openai_compatible;
-                complete_openai_compatible(&self.api_key, http, &config, messages, tools, None)
+                crate::raw::openai::complete_openai(&self.api_key, http, &config, messages, tools)
                     .await
             }
             Provider::Anthropic => {
@@ -880,11 +879,9 @@ mod truncate_tests {
         let budget = h[3..].iter().map(|m| m.estimate_tokens()).sum::<usize>() + 10;
         truncate_to_token_budget(&mut h, budget);
         no_orphans(&h);
-        // Should start at user("y") or later
-        assert!(
-            h.iter().all(|m| !matches!(m, Message::ToolResult { .. })
-                || matches!(m, Message::ToolResult { .. }))
-        );
+        // Should start at user("y") or later — first message must not be a
+        // ToolResult (which would be orphaned).
+        assert!(!matches!(h.first(), Some(Message::ToolResult { .. })));
         no_orphans(&h);
     }
 

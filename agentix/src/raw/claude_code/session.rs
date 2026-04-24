@@ -451,5 +451,6 @@ pub(crate) fn parse_usage(u: &serde_json::Value) -> UsageStats {
         total_tokens: prompt + completion,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
+        reasoning_tokens: 0,
     }
 }

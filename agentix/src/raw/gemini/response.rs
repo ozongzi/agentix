@@ -25,7 +25,18 @@ pub struct ResponseContent {
 pub struct ResponsePart {
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
     pub function_call: Option<ResponseFunctionCall>,
+    /// `true` distinguishes a summarized chain-of-thought part from an answer
+    /// part. Only present when `includeThoughts: true` was requested.
+    #[serde(default)]
+    pub thought: Option<bool>,
+    /// Encrypted hint the server validates on subsequent turns. Gemini 3
+    /// enforces presence on the first `functionCall` part per step; older
+    /// models attach it to the first part of any type. Must round-trip
+    /// verbatim — we carry the entire part through `provider_data`.
+    #[serde(default)]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -43,6 +54,10 @@ pub struct UsageMetadata {
     /// Tokens served from cache (implicit or explicit context cache hit).
     #[serde(default)]
     pub cached_content_token_count: u32,
+    /// Tokens spent on internal thinking — available when
+    /// `includeThoughts: true`.
+    #[serde(default)]
+    pub thoughts_token_count: u32,
 }
 
 impl From<UsageMetadata> for crate::types::UsageStats {
@@ -52,6 +67,7 @@ impl From<UsageMetadata> for crate::types::UsageStats {
             completion_tokens: u.candidates_token_count as usize,
             total_tokens: u.total_token_count as usize,
             cache_read_tokens: u.cached_content_token_count as usize,
+            reasoning_tokens: u.thoughts_token_count as usize,
             ..Default::default()
         }
     }

@@ -1,21 +1,29 @@
 {
-  "id": "chatcmpl-abc123",
-  "object": "chat.completion",
-  "created": 1700000000,
-  "model": "gpt-4o-2024-08-06",
-  "choices": [
+  "id": "resp_1",
+  "object": "response",
+  "created_at": 1700000000,
+  "status": "completed",
+  "model": "gpt-5",
+  "output": [
     {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "The capital of France is Paris."
-      },
-      "finish_reason": "stop"
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "The capital of France is Paris.",
+          "annotations": []
+        }
+      ]
     }
   ],
   "usage": {
-    "prompt_tokens": 14,
-    "completion_tokens": 7,
-    "total_tokens": 21
+    "input_tokens": 14,
+    "output_tokens": 7,
+    "total_tokens": 21,
+    "input_tokens_details": {"cached_tokens": 0},
+    "output_tokens_details": {"reasoning_tokens": 0}
   }
 }

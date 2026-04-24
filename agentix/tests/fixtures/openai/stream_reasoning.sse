@@ -1,12 +1,36 @@
-data: {"id":"chatcmpl-reason1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me think"},"finish_reason":null}]}
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_1","status":"in_progress","model":"gpt-5"}}
 
-data: {"id":"chatcmpl-reason1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"reasoning_content":" about this..."},"finish_reason":null}]}
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[]}}
 
-data: {"id":"chatcmpl-reason1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":"The answer"},"finish_reason":null}]}
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":"Let me think"}
 
-data: {"id":"chatcmpl-reason1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{"content":" is 42."},"finish_reason":null}]}
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","item_id":"rs_1","output_index":0,"summary_index":0,"delta":" about this..."}
 
-data: {"id":"chatcmpl-reason1","object":"chat.completion.chunk","created":1700000000,"model":"deepseek-reasoner","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}
+event: response.reasoning_summary_text.done
+data: {"type":"response.reasoning_summary_text.done","item_id":"rs_1","output_index":0,"summary_index":0,"text":"Let me think about this..."}
 
-data: [DONE]
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"Let me think about this..."}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":"The answer"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":1,"content_index":0,"delta":" is 42."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","item_id":"msg_1","output_index":1,"content_index":0,"text":"The answer is 42."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"The answer is 42."}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"id":"rs_1","type":"reasoning","summary":[{"type":"summary_text","text":"Let me think about this..."}]},{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"output_text","text":"The answer is 42."}]}],"usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18,"output_tokens_details":{"reasoning_tokens":5}}}}
 

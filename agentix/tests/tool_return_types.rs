@@ -152,7 +152,7 @@ fn text(parts: Vec<agentix::Content>) -> String {
 /// Parse the text content as JSON Value.
 fn json_val(parts: Vec<agentix::Content>) -> Value {
     let t = text(parts);
-    serde_json::from_str(&t).unwrap_or_else(|_| Value::String(t))
+    serde_json::from_str(&t).unwrap_or(Value::String(t))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
