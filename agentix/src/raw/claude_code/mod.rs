@@ -20,6 +20,7 @@
 
 pub(crate) mod session;
 
+use std::collections::HashMap;
 use std::process::Stdio;
 
 use async_stream::stream;
@@ -41,8 +42,81 @@ use crate::tool_trait::{Tool, ToolOutput};
 use crate::types::{CompleteResponse, FinishReason, PartialToolCall, ToolCallChunk, UsageStats};
 
 use self::session::{
-    Cleanup, MCP_SERVER_NAME, parse_usage, split_last_user, strip_mcp_prefix, write_fake_session,
+    Cleanup, MCP_SERVER_NAME, is_tool_result_content, parse_usage, split_last_user,
+    strip_mcp_prefix, write_fake_session,
 };
+
+fn ensure_toolu_id(id: &str, id_map: &mut HashMap<String, String>) -> String {
+    if id.starts_with("toolu_") {
+        return id.to_string();
+    }
+    if let Some(mapped) = id_map.get(id) {
+        return mapped.clone();
+    }
+    let mapped = format!("toolu_{}", uuid::Uuid::new_v4().simple());
+    id_map.insert(id.to_string(), mapped.clone());
+    mapped
+}
+
+fn assistant_replay_message(
+    assistant: Message,
+    session_id: Option<&str>,
+) -> Option<(serde_json::Value, HashMap<String, String>)> {
+    let Message::Assistant {
+        content,
+        reasoning: _,
+        tool_calls,
+    } = assistant
+    else {
+        return None;
+    };
+
+    let mut id_map = HashMap::new();
+    let mut blocks = Vec::new();
+    if let Some(text) = content
+        && !text.is_empty()
+    {
+        blocks.push(serde_json::json!({"type": "text", "text": text}));
+    }
+    for tc in tool_calls {
+        let id = ensure_toolu_id(&tc.id, &mut id_map);
+        let input: serde_json::Value =
+            serde_json::from_str(&tc.arguments).unwrap_or_else(|_| serde_json::json!({}));
+        blocks.push(serde_json::json!({
+            "type": "tool_use",
+            "id": id,
+            "name": format!("mcp__{}__{}", MCP_SERVER_NAME, tc.name),
+            "input": input,
+            "caller": {"type": "direct"},
+        }));
+    }
+
+    Some((
+        serde_json::json!({
+            "type": "assistant",
+            "session_id": session_id.unwrap_or(""),
+            "parent_tool_use_id": null,
+            "uuid": uuid::Uuid::new_v4().to_string(),
+            "message": {
+                "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+                "type": "message",
+                "role": "assistant",
+                "content": blocks,
+                "model": "claude-code",
+                "stop_reason": "tool_use",
+                "stop_sequence": null,
+                "stop_details": null,
+                "usage": {
+                    "input_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 0,
+                },
+            },
+        }),
+        id_map,
+    ))
+}
 
 // ── Stub tools ───────────────────────────────────────────────────────────────
 
@@ -78,7 +152,7 @@ async fn start_claude(
     messages: &[Message],
     tools: &[ToolDefinition],
 ) -> Result<(Cleanup, Child), ApiError> {
-    let (prev_history, mut last_user_content) =
+    let (mut prev_history, mut last_user_content) =
         split_last_user(messages.to_vec()).map_err(ApiError::Other)?;
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -109,16 +183,36 @@ async fn start_claude(
     guard.temp_files.push(mcp_config_path.clone());
 
     let mut resume_args: Vec<String> = Vec::new();
-    if !prev_history.is_empty() {
-        let (sid, path, id_map) = write_fake_session(&prev_history)
+    let tail_is_tool_result = is_tool_result_content(&last_user_content);
+    let pending_assistant = if tail_is_tool_result {
+        match prev_history.last() {
+            Some(Message::Assistant { .. }) => prev_history.pop(),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let resume_history = prev_history;
+    let mut session_id: Option<String> = None;
+    if !resume_history.is_empty() {
+        let (sid, path, id_map) = write_fake_session(&resume_history)
             .await
             .map_err(|e| ApiError::Other(format!("write fake session: {e}")))?;
         guard.temp_files.push(path);
         resume_args.push("--resume".into());
-        resume_args.push(sid);
+        resume_args.push(sid.clone());
+        session_id = Some(sid);
         // Rewrite any tool_use_ids in the stdin message to match the remapped
         // ids in the resumed session.
         self::session::remap_tool_use_ids(&mut last_user_content, &id_map);
+    }
+
+    let mut stdin_prefix = Vec::new();
+    if let Some(assistant) = pending_assistant
+        && let Some((msg, id_map)) = assistant_replay_message(assistant, session_id.as_deref())
+    {
+        self::session::remap_tool_use_ids(&mut last_user_content, &id_map);
+        stdin_prefix.push(msg);
     }
 
     let mut args: Vec<String> = vec![
@@ -164,13 +258,32 @@ async fn start_claude(
         .map_err(|e| ApiError::Other(format!("spawn claude: {e}")))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        let msg = serde_json::json!({
+        for msg in stdin_prefix {
+            let mut line = msg.to_string();
+            line.push('\n');
+            if let Err(e) = stdin.write_all(line.as_bytes()).await {
+                warn!(error = %e, "write stdin replay");
+            }
+        }
+        let mut msg = serde_json::json!({
             "type": "user",
+            "session_id": session_id.as_deref().unwrap_or(""),
+            "parent_tool_use_id": null,
             "message": {
                 "role": "user",
                 "content": last_user_content,
             }
         });
+        if tail_is_tool_result && let Some(obj) = msg.as_object_mut() {
+            obj.insert(
+                "uuid".into(),
+                serde_json::Value::String(uuid::Uuid::new_v4().to_string()),
+            );
+            obj.insert(
+                "timestamp".into(),
+                serde_json::Value::String(self::session::chrono_like_now()),
+            );
+        }
         let mut line = msg.to_string();
         line.push('\n');
         if let Err(e) = stdin.write_all(line.as_bytes()).await {

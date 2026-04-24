@@ -93,11 +93,7 @@ pub(crate) fn split_last_user(
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    serde_json::json!({
-                        "type": "tool_result",
-                        "tool_use_id": call_id,
-                        "content": text,
-                    })
+                    tool_result_block(call_id, text)
                 })
                 .collect();
             Ok((history, serde_json::Value::Array(blocks)))
@@ -132,6 +128,16 @@ pub(crate) fn remap_tool_use_ids(
     }
 }
 
+pub(crate) fn is_tool_result_content(content: &serde_json::Value) -> bool {
+    let Some(arr) = content.as_array() else {
+        return false;
+    };
+    !arr.is_empty()
+        && arr
+            .iter()
+            .all(|block| block.get("type").and_then(|x| x.as_str()) == Some("tool_result"))
+}
+
 pub(crate) fn user_content_to_json(parts: &[Content]) -> serde_json::Value {
     if let [Content::Text { text }] = parts {
         return serde_json::Value::String(text.clone());
@@ -160,6 +166,39 @@ pub(crate) fn user_content_to_json(parts: &[Content]) -> serde_json::Value {
         })
         .collect();
     serde_json::Value::Array(blocks)
+}
+
+fn tool_result_block(
+    tool_use_id: impl Into<String>,
+    content: impl Into<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "type": "tool_result",
+        "tool_use_id": tool_use_id.into(),
+        "content": content.into(),
+        "is_error": false,
+    })
+}
+
+fn empty_usage() -> serde_json::Value {
+    serde_json::json!({
+        "input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0,
+        "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0,
+        },
+        "service_tier": null,
+        "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 0,
+        },
+        "inference_geo": null,
+        "iterations": null,
+        "speed": null,
+    })
 }
 
 /// `~/.claude/projects/<sanitized_cwd>/<uuid>.jsonl` — claude's scheme:
@@ -206,6 +245,9 @@ pub(crate) async fn write_fake_session(
 
     let mut id_map: HashMap<String, String> = HashMap::new();
     let mut remap = |id: &str| -> String {
+        if id.starts_with("toolu_") {
+            return id.to_string();
+        }
         if let Some(new) = id_map.get(id) {
             return new.clone();
         }
@@ -214,13 +256,15 @@ pub(crate) async fn write_fake_session(
         new
     };
 
-    let now = chrono_like_now();
+    let base_ms = unix_millis_now();
     let cwd_str = cwd.to_string_lossy().into_owned();
     let mut parent_uuid: Option<String> = None;
+    let mut tool_parent_map: HashMap<String, String> = HashMap::new();
     let mut lines = String::new();
 
-    for msg in history {
+    for (idx, msg) in history.iter().enumerate() {
         let uuid_ = uuid::Uuid::new_v4().to_string();
+        let timestamp = chrono_like_unix_millis(base_ms + idx as u128);
         let entry = match msg {
             Message::User(parts) => serde_json::json!({
                 "parentUuid": parent_uuid,
@@ -231,7 +275,7 @@ pub(crate) async fn write_fake_session(
                     "content": user_content_to_json(parts),
                 },
                 "uuid": uuid_,
-                "timestamp": now,
+                "timestamp": timestamp,
                 "sessionId": sid,
                 "cwd": cwd_str,
                 "userType": "external",
@@ -243,6 +287,7 @@ pub(crate) async fn write_fake_session(
                 reasoning: _,
                 tool_calls,
             } => {
+                let has_tool_calls = !tool_calls.is_empty();
                 let mut blocks = Vec::new();
                 if let Some(c) = content
                     && !c.is_empty()
@@ -251,6 +296,8 @@ pub(crate) async fn write_fake_session(
                 }
                 for tc in tool_calls {
                     let new_id = remap(&tc.id);
+                    tool_parent_map.insert(tc.id.clone(), uuid_.clone());
+                    tool_parent_map.insert(new_id.clone(), uuid_.clone());
                     let input: serde_json::Value =
                         serde_json::from_str(&tc.arguments).unwrap_or(serde_json::json!({}));
                     blocks.push(serde_json::json!({
@@ -258,6 +305,7 @@ pub(crate) async fn write_fake_session(
                         "id": new_id,
                         "name": format!("mcp__{}__{}", MCP_SERVER_NAME, tc.name),
                         "input": input,
+                        "caller": {"type": "direct"},
                     }));
                 }
                 serde_json::json!({
@@ -269,9 +317,15 @@ pub(crate) async fn write_fake_session(
                         "type": "message",
                         "role": "assistant",
                         "content": blocks,
+                        "model": "claude-code",
+                        "stop_reason": if has_tool_calls { "tool_use" } else { "end_turn" },
+                        "stop_sequence": null,
+                        "stop_details": null,
+                        "usage": empty_usage(),
                     },
+                    "requestId": format!("req_fake_{}", uuid::Uuid::new_v4().simple()),
                     "uuid": uuid_,
-                    "timestamp": now,
+                    "timestamp": timestamp,
                     "sessionId": sid,
                     "cwd": cwd_str,
                     "userType": "external",
@@ -281,6 +335,10 @@ pub(crate) async fn write_fake_session(
             }
             Message::ToolResult { call_id, content } => {
                 let new_id = remap(call_id);
+                let source_tool_assistant_uuid = tool_parent_map
+                    .get(call_id)
+                    .or_else(|| tool_parent_map.get(&new_id))
+                    .cloned();
                 let text = content
                     .iter()
                     .filter_map(|c| {
@@ -292,26 +350,32 @@ pub(crate) async fn write_fake_session(
                     })
                     .collect::<Vec<_>>()
                     .join("\n");
-                serde_json::json!({
+                let mut entry = serde_json::json!({
                     "parentUuid": parent_uuid,
                     "isSidechain": false,
                     "type": "user",
                     "message": {
                         "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": new_id,
-                            "content": text,
-                        }]
+                        "content": [tool_result_block(new_id, text.clone())]
                     },
+                    "toolUseResult": text,
                     "uuid": uuid_,
-                    "timestamp": now,
+                    "timestamp": timestamp,
                     "sessionId": sid,
                     "cwd": cwd_str,
                     "userType": "external",
                     "entrypoint": "cli",
                     "version": env!("CARGO_PKG_VERSION"),
-                })
+                });
+                if let Some(source) = source_tool_assistant_uuid
+                    && let Some(obj) = entry.as_object_mut()
+                {
+                    obj.insert(
+                        "sourceToolAssistantUUID".into(),
+                        serde_json::Value::String(source),
+                    );
+                }
+                entry
             }
         };
         lines.push_str(&entry.to_string());
@@ -330,12 +394,20 @@ pub(crate) fn dirs_home() -> Option<PathBuf> {
 }
 
 pub(crate) fn chrono_like_now() -> String {
+    chrono_like_unix_millis(unix_millis_now())
+}
+
+fn unix_millis_now() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let d = SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = d.as_secs();
-    let ms = d.subsec_millis();
+        .unwrap_or_default()
+        .as_millis()
+}
+
+fn chrono_like_unix_millis(unix_ms: u128) -> String {
+    let secs = (unix_ms / 1000) as u64;
+    let ms = (unix_ms % 1000) as u32;
     let (y, mo, d, h, mi, s) = epoch_to_ymdhms(secs);
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{ms:03}Z")
 }
