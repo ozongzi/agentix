@@ -55,16 +55,20 @@ pub struct Usage {
     pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+// GLM billing semantics: `prompt_tokens_details.cached_tokens` is a subset of
+// `prompt_tokens` (official example: prompt=1200 of which 800 cached).
+// Implicit/automatic caching; a cache-storage billing dimension exists but is
+// currently free. Reasoning is billed inside output.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
+        let cached = u
+            .prompt_tokens_details
+            .map(|d| d.cached_tokens as u64)
+            .unwrap_or(0);
         Self {
-            prompt_tokens: u.prompt_tokens as usize,
-            completion_tokens: u.completion_tokens as usize,
-            total_tokens: u.total_tokens as usize,
-            cache_read_tokens: u
-                .prompt_tokens_details
-                .map(|d| d.cached_tokens as usize)
-                .unwrap_or(0),
+            input: (u.prompt_tokens as u64).saturating_sub(cached),
+            cache_read: cached,
+            output: u.completion_tokens as u64,
             ..Default::default()
         }
     }

@@ -91,38 +91,50 @@ pub struct Usage {
 pub struct InputTokensDetails {
     #[serde(default)]
     pub cached_tokens: u32,
+    /// Cache-write tokens, surfaced on the newest model families that charge
+    /// cache writes (1.25× input). Zero/absent elsewhere.
+    #[serde(default)]
+    pub cache_write_tokens: u32,
+    #[serde(default)]
+    pub audio_tokens: u32,
 }
 
 #[derive(Debug, Deserialize, Default)]
 pub struct OutputTokensDetails {
     #[serde(default)]
     pub reasoning_tokens: u32,
+    #[serde(default)]
+    pub audio_tokens: u32,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+// OpenAI billing semantics: `cached_tokens` is a SUBSET of `input_tokens`
+// (billed input = (input − cached) × full + cached × cached rate) and
+// `reasoning_tokens` a subset of `output_tokens`, so both are subtracted out
+// to yield disjoint buckets. Audio tokens are likewise subsets with their own
+// rates.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
-        let cached = u
-            .input_tokens_details
-            .as_ref()
-            .map(|d| d.cached_tokens)
-            .unwrap_or(0);
-        let reasoning = u
-            .output_tokens_details
-            .as_ref()
-            .map(|d| d.reasoning_tokens)
-            .unwrap_or(0);
-        let total = if u.total_tokens > 0 {
-            u.total_tokens
-        } else {
-            u.input_tokens + u.output_tokens
-        };
+        let ind = u.input_tokens_details.unwrap_or_default();
+        let outd = u.output_tokens_details.unwrap_or_default();
+        // cache_write_tokens are fresh input tokens billed at the write rate
+        // (1.25×) instead of the plain input rate — also a subset of
+        // `input_tokens`, so they move out of the text bucket too.
+        let input = (u.input_tokens as u64)
+            .saturating_sub(ind.cached_tokens as u64)
+            .saturating_sub(ind.audio_tokens as u64)
+            .saturating_sub(ind.cache_write_tokens as u64);
+        let output = (u.output_tokens as u64)
+            .saturating_sub(outd.reasoning_tokens as u64)
+            .saturating_sub(outd.audio_tokens as u64);
         Self {
-            prompt_tokens: u.input_tokens as usize,
-            completion_tokens: u.output_tokens as usize,
-            total_tokens: total as usize,
-            cache_read_tokens: cached as usize,
-            cache_creation_tokens: 0,
-            reasoning_tokens: reasoning as usize,
+            input,
+            input_audio: ind.audio_tokens as u64,
+            cache_read: ind.cached_tokens as u64,
+            cache_write_5m: ind.cache_write_tokens as u64,
+            output,
+            output_audio: outd.audio_tokens as u64,
+            reasoning: outd.reasoning_tokens as u64,
+            ..Default::default()
         }
     }
 }

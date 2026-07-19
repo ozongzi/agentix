@@ -28,7 +28,7 @@ use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
 use crate::request::{Message, ToolCall};
 use crate::types::{
-    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, Usage,
 };
 
 use request::ToolChoice;
@@ -231,7 +231,7 @@ pub(crate) async fn complete_openai(
         },
         tool_calls,
         provider_data,
-        usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+        usage: raw.usage.map(Usage::from).unwrap_or_default(),
         finish_reason: raw
             .status
             .as_deref()
@@ -265,7 +265,7 @@ fn handle_stream_event(
     Vec<LlmEvent>,
     bool,
     Option<Vec<serde_json::Value>>,
-    Option<UsageStats>,
+    Option<Usage>,
 ) {
     match event {
         StreamEvent::ResponseCreated
@@ -340,7 +340,7 @@ fn handle_stream_event(
         StreamEvent::FunctionCallArgumentsDelta { .. } => (vec![], false, None, None),
 
         StreamEvent::ResponseCompleted { response } => {
-            let usage = response.usage.map(UsageStats::from);
+            let usage = response.usage.map(Usage::from);
             (vec![], true, Some(response.output), usage)
         }
         StreamEvent::ResponseFailed { response } => {

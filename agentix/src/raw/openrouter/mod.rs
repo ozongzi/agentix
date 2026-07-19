@@ -29,7 +29,7 @@ use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
 use crate::request::{Message, ToolCall, ToolChoice};
 use crate::types::{
-    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, Usage,
 };
 
 use response::{DeltaToolCall, StreamChunk};
@@ -129,7 +129,7 @@ fn parse_chunk(
 ) -> Vec<LlmEvent> {
     let mut events = Vec::new();
     if let Some(u) = chunk.usage {
-        events.push(LlmEvent::Usage(UsageStats::from(u)));
+        events.push(LlmEvent::Usage(Usage::from(u)));
     }
     let choice = match chunk.choices.into_iter().next() {
         Some(c) => c,
@@ -355,7 +355,7 @@ pub(crate) async fn complete_openrouter(
         reasoning: msg.as_ref().and_then(|m| m.reasoning.clone()),
         tool_calls,
         provider_data,
-        usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+        usage: raw.usage.map(Usage::from).unwrap_or_default(),
         finish_reason: finish_reason.unwrap_or_default(),
     })
 }

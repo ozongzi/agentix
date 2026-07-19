@@ -39,17 +39,41 @@ pub struct Usage {
     pub cache_read_input_tokens: u32,
     #[serde(default)]
     pub cache_creation_input_tokens: u32,
+    /// Per-TTL breakdown of cache writes (newer API versions). When present,
+    /// its parts sum to `cache_creation_input_tokens`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation: Option<CacheCreation>,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CacheCreation {
+    #[serde(default)]
+    pub ephemeral_5m_input_tokens: u32,
+    #[serde(default)]
+    pub ephemeral_1h_input_tokens: u32,
+}
+
+// Anthropic billing semantics: `input_tokens` already EXCLUDES cache tokens
+// (total input = input + cache_read + cache_creation), so the wire fields map
+// straight onto the disjoint buckets. Thinking tokens are billed as ordinary
+// output and are not broken out on the wire, so `reasoning` stays 0.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
+        // Prefer the per-TTL breakdown; fall back to attributing all writes
+        // to the 5-minute bucket (the default TTL, 1.25× write rate).
+        let (write_5m, write_1h) = match u.cache_creation {
+            Some(c) if c.ephemeral_5m_input_tokens + c.ephemeral_1h_input_tokens > 0 => {
+                (c.ephemeral_5m_input_tokens, c.ephemeral_1h_input_tokens)
+            }
+            _ => (u.cache_creation_input_tokens, 0),
+        };
         Self {
-            prompt_tokens: u.input_tokens as usize,
-            completion_tokens: u.output_tokens as usize,
-            total_tokens: (u.input_tokens + u.output_tokens) as usize,
-            cache_read_tokens: u.cache_read_input_tokens as usize,
-            cache_creation_tokens: u.cache_creation_input_tokens as usize,
-            reasoning_tokens: 0,
+            input: u.input_tokens as u64,
+            cache_read: u.cache_read_input_tokens as u64,
+            cache_write_5m: write_5m as u64,
+            cache_write_1h: write_1h as u64,
+            output: u.output_tokens as u64,
+            ..Default::default()
         }
     }
 }

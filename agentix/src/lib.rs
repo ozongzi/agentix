@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 pub(crate) mod config;
 pub mod error;
 pub mod msg;
+pub mod pricing;
 pub(crate) mod provider;
 pub mod raw;
 pub mod request;
@@ -63,7 +64,7 @@ pub use request::{
     truncate_to_token_budget,
 };
 pub use tool_trait::{Tool, ToolBundle, ToolOutput};
-pub use types::{CompleteResponse, FinishReason, UsageStats};
+pub use types::{CompleteResponse, FinishReason, Usage};
 
 pub use agentix_macros::tool;
 pub use async_trait;

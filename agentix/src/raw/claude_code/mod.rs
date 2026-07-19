@@ -42,7 +42,7 @@ use crate::msg::LlmEvent;
 use crate::raw::shared::ToolDefinition;
 use crate::request::{Message, ToolCall};
 use crate::tool_trait::{Tool, ToolOutput};
-use crate::types::{CompleteResponse, FinishReason, PartialToolCall, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, PartialToolCall, ToolCallChunk, Usage};
 
 use self::replay::ReplayState;
 use self::session::{
@@ -689,20 +689,25 @@ fn translate_stream_event_line(v: &serde_json::Value, state: &mut StreamState) -
 /// `message_start` (input + cache counts) and `message_delta` (final output),
 /// so we keep the non-zero fields from whichever event carried them rather than
 /// letting the later zero-cache delta clobber the cache numbers.
-fn merge_usage(acc: &mut UsageStats, u: UsageStats) {
-    if u.prompt_tokens > 0 {
-        acc.prompt_tokens = u.prompt_tokens;
+fn merge_usage(acc: &mut Usage, u: Usage) {
+    if u.input > 0 {
+        acc.input = u.input;
     }
-    if u.completion_tokens > 0 {
-        acc.completion_tokens = u.completion_tokens;
+    if u.output > 0 {
+        acc.output = u.output;
     }
-    if u.cache_read_tokens > 0 {
-        acc.cache_read_tokens = u.cache_read_tokens;
+    if u.cache_read > 0 {
+        acc.cache_read = u.cache_read;
     }
-    if u.cache_creation_tokens > 0 {
-        acc.cache_creation_tokens = u.cache_creation_tokens;
+    if u.cache_write_5m > 0 {
+        acc.cache_write_5m = u.cache_write_5m;
     }
-    acc.total_tokens = acc.prompt_tokens + acc.completion_tokens;
+    if u.cache_write_1h > 0 {
+        acc.cache_write_1h = u.cache_write_1h;
+    }
+    if u.reported_cost.is_some() {
+        acc.reported_cost = u.reported_cost;
+    }
 }
 
 /// Strip the `mcp__agentix__` namespace the CLI adds to MCP tool names so the
@@ -744,7 +749,7 @@ fn proxy_event_stream(
 
         let mut bufs = StreamBufs::new();
         let mut blocks: Vec<Option<BlockBuild>> = Vec::new();
-        let mut acc_usage = UsageStats::default();
+        let mut acc_usage = Usage::default();
         let mut usage_seen = false;
         let mut done_turns = 0usize;
         let mut saw_stop = false;
@@ -890,6 +895,19 @@ pub(crate) async fn stream_claude_code(
                 let subtype = v.get("subtype").and_then(|x| x.as_str()).unwrap_or("");
                 let is_error = v.get("is_error").and_then(|x| x.as_bool()).unwrap_or(false);
                 if subtype == "success" && !is_error {
+                    // The result payload carries `total_cost_usd` — the CLI's
+                    // local estimate at API list prices (informational under a
+                    // subscription, where there is no marginal cost). Surface
+                    // it as a reported-cost-only usage event.
+                    if let Some(cost) = v.get("total_cost_usd").and_then(|x| x.as_f64()) {
+                        yield LlmEvent::Usage(Usage {
+                            reported_cost: Some(crate::types::ReportedCost {
+                                amount: cost,
+                                currency: "USD".to_string(),
+                            }),
+                            ..Default::default()
+                        });
+                    }
                     yield LlmEvent::Done;
                 } else {
                     warn!(payload = %v, "claude-code non-success result");
@@ -949,14 +967,14 @@ pub(crate) async fn complete_claude_code(
     let mut content_buf = String::new();
     let mut reasoning_buf = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
-    let mut usage = UsageStats::default();
+    let mut usage = Usage::default();
 
     while let Some(ev) = stream.next().await {
         match ev {
             LlmEvent::Token(t) => content_buf.push_str(&t),
             LlmEvent::Reasoning(t) => reasoning_buf.push_str(&t),
             LlmEvent::ToolCall(tc) => tool_calls.push(tc),
-            LlmEvent::Usage(u) => usage = u,
+            LlmEvent::Usage(u) => merge_usage(&mut usage, u),
             LlmEvent::Error(e) => return Err(ApiError::Llm(e)),
             LlmEvent::Done => break,
             _ => {}

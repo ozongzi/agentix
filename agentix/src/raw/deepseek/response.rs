@@ -51,13 +51,24 @@ pub struct Usage {
     pub prompt_cache_miss_tokens: u32,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+// DeepSeek billing semantics: `prompt_tokens = hit + miss` — a split, not an
+// extra count. Cost = miss × miss-price + hit × hit-price + output. Automatic
+// disk caching: no write fee, no storage fee (and the 2025 off-peak discount
+// program has ended). Reasoning (deepseek-reasoner CoT) is billed as ordinary
+// output and not broken out in usage.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
+        let hit = u.prompt_cache_hit_tokens as u64;
         Self {
-            prompt_tokens: u.prompt_tokens as usize,
-            completion_tokens: u.completion_tokens as usize,
-            total_tokens: u.total_tokens as usize,
-            cache_read_tokens: u.prompt_cache_hit_tokens as usize,
+            // Prefer the explicit miss count; fall back to prompt − hit for
+            // responses that omit the split fields.
+            input: if u.prompt_cache_miss_tokens > 0 {
+                u.prompt_cache_miss_tokens as u64
+            } else {
+                (u.prompt_tokens as u64).saturating_sub(hit)
+            },
+            cache_read: hit,
+            output: u.completion_tokens as u64,
             ..Default::default()
         }
     }

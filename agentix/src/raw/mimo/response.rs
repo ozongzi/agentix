@@ -39,15 +39,18 @@ pub struct Usage {
     pub cache_creation_input_tokens: u32,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+// MiMo speaks the Anthropic wire format, so we assume Anthropic's additive
+// semantics (`input_tokens` excludes cache tokens). Note MiMo's own docs
+// don't document the cache fields; billing is hit/miss priced with cache
+// writes currently free.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
         Self {
-            prompt_tokens: u.input_tokens as usize,
-            completion_tokens: u.output_tokens as usize,
-            total_tokens: (u.input_tokens + u.output_tokens) as usize,
-            cache_read_tokens: u.cache_read_input_tokens as usize,
-            cache_creation_tokens: u.cache_creation_input_tokens as usize,
-            reasoning_tokens: 0,
+            input: u.input_tokens as u64,
+            cache_read: u.cache_read_input_tokens as u64,
+            cache_write_5m: u.cache_creation_input_tokens as u64,
+            output: u.output_tokens as u64,
+            ..Default::default()
         }
     }
 }

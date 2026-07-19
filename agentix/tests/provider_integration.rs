@@ -207,7 +207,7 @@ fn collect_reasoning(events: &[LlmEvent]) -> String {
         .collect()
 }
 
-fn find_usage(events: &[LlmEvent]) -> Option<&agentix::types::UsageStats> {
+fn find_usage(events: &[LlmEvent]) -> Option<&agentix::types::Usage> {
     events.iter().find_map(|e| {
         if let LlmEvent::Usage(u) = e {
             Some(u)
@@ -243,8 +243,8 @@ mod openai {
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
         let u = find_usage(&events).expect("should have usage");
-        assert_eq!(u.prompt_tokens, 14);
-        assert_eq!(u.completion_tokens, 7);
+        assert_eq!(u.input, 14);
+        assert_eq!(u.output, 7);
         assert!(matches!(events.last(), Some(LlmEvent::Done)));
     }
 
@@ -288,7 +288,7 @@ mod openai {
             Some("The capital of France is Paris.")
         );
         assert!(resp.tool_calls.is_empty());
-        assert_eq!(resp.usage.total_tokens, 21);
+        assert_eq!(resp.usage.total(), 21);
     }
 
     #[tokio::test]
@@ -304,7 +304,7 @@ mod openai {
         assert_eq!(resp.tool_calls[0].name, "get_weather");
         assert_eq!(resp.tool_calls[0].id, "call_abc123");
         // Reasoning tokens from output_tokens_details.
-        assert_eq!(resp.usage.reasoning_tokens, 3);
+        assert_eq!(resp.usage.reasoning, 3);
         // provider_data captures the full output[] (reasoning + function_call)
         // verbatim — includes encrypted_content for next-turn round-trip.
         let pd = resp
@@ -461,8 +461,8 @@ mod anthropic {
             resp.content.as_deref(),
             Some("The capital of France is Paris.")
         );
-        assert_eq!(resp.usage.prompt_tokens, 12);
-        assert_eq!(resp.usage.completion_tokens, 8);
+        assert_eq!(resp.usage.input, 12);
+        assert_eq!(resp.usage.output, 8);
     }
 
     #[tokio::test]
@@ -544,8 +544,8 @@ mod gemini {
 
         assert_eq!(collect_tokens(&events), "The capital of France is Paris.");
         let u = find_usage(&events).expect("should have usage");
-        assert_eq!(u.prompt_tokens, 10);
-        assert_eq!(u.completion_tokens, 7);
+        assert_eq!(u.input, 10);
+        assert_eq!(u.output, 7);
         assert!(matches!(events.last(), Some(LlmEvent::Done)));
     }
 
@@ -583,7 +583,7 @@ mod gemini {
             resp.content.as_deref(),
             Some("The capital of France is Paris.")
         );
-        assert_eq!(resp.usage.total_tokens, 17);
+        assert_eq!(resp.usage.total(), 17);
     }
 
     #[tokio::test]
@@ -605,7 +605,7 @@ mod gemini {
         );
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].name, "get_weather");
-        assert_eq!(resp.usage.reasoning_tokens, 4);
+        assert_eq!(resp.usage.reasoning, 4);
         let pd = resp
             .provider_data
             .as_ref()

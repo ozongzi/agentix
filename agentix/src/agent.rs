@@ -7,7 +7,7 @@ use crate::error::ApiError;
 use crate::msg::LlmEvent;
 use crate::request::{Message, Request, ToolCall, truncate_to_token_budget};
 use crate::tool_trait::{Tool, ToolOutput};
-use crate::types::UsageStats;
+use crate::types::Usage;
 
 // ── AgentEvent ────────────────────────────────────────────────────────────────
 
@@ -36,10 +36,10 @@ pub enum AgentEvent {
         content: Vec<crate::request::Content>,
     },
     /// Token usage from one LLM request.
-    Usage(UsageStats),
+    Usage(Usage),
     /// Emitted once when the agent loop finishes normally.
     /// Contains cumulative token usage across all LLM requests in this run.
-    Done(UsageStats),
+    Done(Usage),
     /// A recoverable stream error that was treated as end-of-stream.
     Warning(String),
     /// A fatal error — the stream will end after this.
@@ -115,7 +115,7 @@ pub fn agent(
     let tools: std::sync::Arc<dyn Tool> = std::sync::Arc::new(tools);
 
     Box::pin(stream! {
-    let mut total_usage = UsageStats::default();
+    let mut total_usage = Usage::default();
     loop {
             // ── Truncate history if budget set ────────────────────────
             if let Some(budget) = history_budget {
@@ -176,10 +176,8 @@ pub fn agent(
                     }
 
                     Some(LlmEvent::Usage(u)) => {
-                        total_usage.prompt_tokens     += u.prompt_tokens;
-                        total_usage.completion_tokens += u.completion_tokens;
-                        total_usage.total_tokens      += u.total_tokens;
-                        debug!(prompt = u.prompt_tokens, completion = u.completion_tokens, "agent: LLM usage");
+                        total_usage += u.clone();
+                        debug!(input = u.total_input(), output = u.total_output(), "agent: LLM usage");
                         yield AgentEvent::Usage(u);
                     }
 

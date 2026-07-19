@@ -12,7 +12,7 @@ use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
 use crate::request::{Message, ToolCall};
 use crate::types::{
-    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, Usage,
 };
 
 use response::{ContentBlockDelta, ContentBlockStart, ResponseBlock, StreamEvent};
@@ -191,7 +191,7 @@ async fn complete_anthropic_with_post_config(
         },
         tool_calls,
         provider_data,
-        usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+        usage: raw.usage.map(Usage::from).unwrap_or_default(),
         finish_reason: raw
             .stop_reason
             .as_deref()
@@ -218,13 +218,13 @@ pub(crate) fn parse_stream_event(
     match ev {
         StreamEvent::MessageStart { message } => {
             if let Some(u) = message.usage {
-                return vec![LlmEvent::Usage(UsageStats::from(u))];
+                return vec![LlmEvent::Usage(Usage::from(u))];
             }
             vec![]
         }
         StreamEvent::MessageDelta { usage, .. } => {
             if let Some(u) = usage {
-                return vec![LlmEvent::Usage(UsageStats::from(u))];
+                return vec![LlmEvent::Usage(Usage::from(u))];
             }
             vec![]
         }

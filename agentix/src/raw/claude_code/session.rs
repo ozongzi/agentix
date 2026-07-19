@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use tokio::task::JoinHandle;
 
 use crate::request::{Content, Message};
-use crate::types::UsageStats;
+use crate::types::Usage;
 
 /// Name the MCP server is registered under in claude's `--mcp-config`.
 /// Tools surface to the model as `mcp__agentix__<tool>`.
@@ -460,18 +460,36 @@ pub(crate) fn strip_mcp_prefix(name: &str) -> String {
     name.strip_prefix(&pat).unwrap_or(name).to_string()
 }
 
-pub(crate) fn parse_usage(u: &serde_json::Value) -> UsageStats {
-    let get = |k: &str| -> usize { u.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as usize };
-    let prompt = get("input_tokens");
-    let completion = get("output_tokens");
-    let cache_read = get("cache_read_input_tokens");
-    let cache_creation = get("cache_creation_input_tokens");
-    UsageStats {
-        prompt_tokens: prompt,
-        completion_tokens: completion,
-        total_tokens: prompt + completion,
-        cache_read_tokens: cache_read,
-        cache_creation_tokens: cache_creation,
-        reasoning_tokens: 0,
+// Claude Code reports Anthropic-additive usage (`input_tokens` excludes cache
+// tokens; total input = input + cache_read + cache_creation). Under a Max/Pro
+// subscription there is no marginal per-token cost — the CLI's
+// `total_cost_usd` is a local estimate at API list prices (captured by the
+// caller into `reported_cost` where available). The per-TTL `cache_creation`
+// breakdown, when present, splits the write bucket.
+pub(crate) fn parse_usage(u: &serde_json::Value) -> Usage {
+    let get = |k: &str| -> u64 { u.get(k).and_then(|x| x.as_u64()).unwrap_or(0) };
+    let write_total = get("cache_creation_input_tokens");
+    let (write_5m, write_1h) = match u.get("cache_creation") {
+        Some(c) => {
+            let g = |k: &str| c.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+            let (m5, h1) = (
+                g("ephemeral_5m_input_tokens"),
+                g("ephemeral_1h_input_tokens"),
+            );
+            if m5 + h1 > 0 {
+                (m5, h1)
+            } else {
+                (write_total, 0)
+            }
+        }
+        None => (write_total, 0),
+    };
+    Usage {
+        input: get("input_tokens"),
+        cache_read: get("cache_read_input_tokens"),
+        cache_write_5m: write_5m,
+        cache_write_1h: write_1h,
+        output: get("output_tokens"),
+        ..Default::default()
     }
 }

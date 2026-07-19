@@ -155,9 +155,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 batch_has_result = true;
                 println!("RESULT {name}: {}", text(content));
             }
-            AgentEvent::Usage(u) => eprintln!("\n[tokens: {}]", u.total_tokens),
+            AgentEvent::Usage(u) => eprintln!("\n[tokens: {}]", u.total()),
             AgentEvent::Done(total) => {
-                eprintln!("\n[total tokens: {}]", total.total_tokens);
+                eprintln!("\n[total tokens: {}]", total.total());
                 break;
             }
             AgentEvent::Warning(w) => eprintln!("\n[warn] {w}"),

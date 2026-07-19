@@ -33,7 +33,7 @@
 use serde_json::{Value, json};
 
 use crate::msg::LlmEvent;
-use crate::types::{CompleteResponse, FinishReason, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, Usage};
 
 use super::wire;
 
@@ -185,7 +185,7 @@ pub struct ResponsesStreamState {
     current: CurrentItem,
     /// Sealed output items (in order) — replayed in `response.completed`.
     output: Vec<Value>,
-    last_usage: Option<UsageStats>,
+    last_usage: Option<Usage>,
     sequence: u32,
     /// The full output items as we'd persist them — used by the server to
     /// commit to the session store after the stream finishes successfully.

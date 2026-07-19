@@ -24,7 +24,7 @@ use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
 use crate::request::{Message, ToolCall};
 use crate::types::{
-    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, Usage,
 };
 
 use response::Response;
@@ -219,7 +219,7 @@ pub(crate) async fn complete_gemini(
         },
         tool_calls,
         provider_data,
-        usage: raw.usage_metadata.map(UsageStats::from).unwrap_or_default(),
+        usage: raw.usage_metadata.map(Usage::from).unwrap_or_default(),
         finish_reason: finish_reason.unwrap_or_default(),
     })
 }
@@ -227,7 +227,7 @@ pub(crate) async fn complete_gemini(
 fn parse_chunk(chunk: Response, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
     let mut events = Vec::new();
     if let Some(u) = chunk.usage_metadata {
-        events.push(LlmEvent::Usage(UsageStats::from(u)));
+        events.push(LlmEvent::Usage(Usage::from(u)));
     }
     let candidate = match chunk.candidates.and_then(|mut c| {
         if c.is_empty() {

@@ -48,10 +48,27 @@ pub struct DeltaFunctionCall {
     pub arguments: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct PromptTokensDetails {
     #[serde(default)]
     pub cached_tokens: u32,
+    /// Cache-write tokens (usage accounting is always on since 2026).
+    #[serde(default)]
+    pub cache_write_tokens: u32,
+    #[serde(default)]
+    pub audio_tokens: u32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: u32,
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct CostDetails {
+    #[serde(default)]
+    pub upstream_inference_cost: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,18 +78,56 @@ pub struct Usage {
     pub total_tokens: u32,
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompletionTokensDetails>,
+    /// Actual amount charged to the account, in OpenRouter credits (USD).
+    /// Authoritative — no estimation needed when present.
+    #[serde(default)]
+    pub cost: Option<f64>,
+    /// `upstream_inference_cost` is the upstream provider's own charge
+    /// (meaningful for BYOK requests).
+    #[serde(default)]
+    pub cost_details: Option<CostDetails>,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+// OpenRouter billing semantics: OpenAI-style counting — cached and
+// cache-write tokens are subsets of `prompt_tokens`; reasoning is billed as
+// output. Whether `completion_tokens` numerically includes reasoning is not
+// documented, so we apply the same identity test as the Grok adapter.
+// Cache pricing is passed through from the upstream with no markup, and
+// `usage.cost` is the actual USD charge.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
+        let pd = u.prompt_tokens_details.unwrap_or_default();
+        let reasoning = u
+            .completion_tokens_details
+            .map(|d| d.reasoning_tokens as u64)
+            .unwrap_or(0);
+        let (prompt, completion, total) = (
+            u.prompt_tokens as u64,
+            u.completion_tokens as u64,
+            u.total_tokens as u64,
+        );
+        let reasoning_is_additive = reasoning > 0 && total >= prompt + completion + reasoning;
+        let output = if reasoning_is_additive {
+            completion
+        } else {
+            completion.saturating_sub(reasoning)
+        };
         Self {
-            prompt_tokens: u.prompt_tokens as usize,
-            completion_tokens: u.completion_tokens as usize,
-            total_tokens: u.total_tokens as usize,
-            cache_read_tokens: u
-                .prompt_tokens_details
-                .map(|d| d.cached_tokens as usize)
-                .unwrap_or(0),
+            input: prompt
+                .saturating_sub(pd.cached_tokens as u64)
+                .saturating_sub(pd.cache_write_tokens as u64)
+                .saturating_sub(pd.audio_tokens as u64),
+            input_audio: pd.audio_tokens as u64,
+            cache_read: pd.cached_tokens as u64,
+            cache_write_5m: pd.cache_write_tokens as u64,
+            output,
+            reasoning,
+            reported_cost: u.cost.map(|amount| crate::types::ReportedCost {
+                amount,
+                currency: "USD".to_string(),
+            }),
             ..Default::default()
         }
     }

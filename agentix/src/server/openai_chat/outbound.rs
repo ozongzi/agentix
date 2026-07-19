@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use crate::msg::LlmEvent;
-use crate::types::{CompleteResponse, FinishReason, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, Usage};
 
 use super::wire::{
     self, ChatCompletionChunk, ChunkChoice, Delta, DeltaFunctionCall, DeltaToolCall,
@@ -102,7 +102,7 @@ pub struct ChunkState {
     /// subsequent argument chunks omit those fields.
     tool_skeleton_emitted: HashMap<u32, bool>,
     has_tool_calls: bool,
-    last_usage: Option<UsageStats>,
+    last_usage: Option<Usage>,
     include_usage: bool,
 }
 
@@ -465,10 +465,9 @@ mod tests {
             &mut s,
             vec![
                 LlmEvent::Token("hi".into()),
-                LlmEvent::Usage(UsageStats {
-                    prompt_tokens: 5,
-                    completion_tokens: 2,
-                    total_tokens: 7,
+                LlmEvent::Usage(Usage {
+                    input: 5,
+                    output: 2,
                     ..Default::default()
                 }),
                 LlmEvent::Done,

@@ -52,16 +52,10 @@ pub struct LoggedRecord {
     pub upstream_provider: Option<String>,
     #[serde(default)]
     pub upstream_model: Option<String>,
-    #[serde(default)]
-    pub input_tokens: u64,
-    #[serde(default)]
-    pub output_tokens: u64,
-    #[serde(default)]
-    pub cache_read_tokens: u64,
-    #[serde(default)]
-    pub cache_creation_tokens: u64,
-    #[serde(default)]
-    pub reasoning_tokens: u64,
+    /// Normalized disjoint-bucket usage, flattened in the JSONL record
+    /// (`input`, `cache_read`, `cache_write_5m`, `output`, `reasoning`, …).
+    #[serde(flatten, default)]
+    pub usage: agentix::Usage,
     #[serde(default)]
     pub duration_ms: u64,
     pub status: String,
@@ -80,11 +74,9 @@ pub struct LoggedRecord {
 pub struct Totals {
     pub requests: u64,
     pub errors: u64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub reasoning_tokens: u64,
+    /// Per-bucket token sums (disjoint semantics, plain addition).
+    #[serde(flatten)]
+    pub usage: agentix::Usage,
     /// Summed request cost in USD, priced via [`crate::pricing`]. Zero when no
     /// `pricing_model` is configured or the model isn't in the price book.
     pub total_usd: f64,
@@ -98,11 +90,7 @@ impl Totals {
         if r.status != "ok" {
             self.errors += 1;
         }
-        self.input_tokens += r.input_tokens;
-        self.output_tokens += r.output_tokens;
-        self.cache_read_tokens += r.cache_read_tokens;
-        self.cache_creation_tokens += r.cache_creation_tokens;
-        self.reasoning_tokens += r.reasoning_tokens;
+        self.usage += r.usage.clone();
         self.total_usd += cost_usd;
     }
 }
@@ -213,10 +201,7 @@ pub fn aggregate(
             totals,
         })
         .collect();
-    per_user.sort_by(|a, b| {
-        (b.totals.input_tokens + b.totals.output_tokens)
-            .cmp(&(a.totals.input_tokens + a.totals.output_tokens))
-    });
+    per_user.sort_by_key(|x| std::cmp::Reverse(x.totals.usage.total()));
 
     let per_day: Vec<DayPoint> = by_day
         .into_iter()
@@ -227,10 +212,7 @@ pub fn aggregate(
         .into_iter()
         .map(|(key, totals)| ModelBucket { key, totals })
         .collect();
-    per_model.sort_by(|a, b| {
-        (b.totals.input_tokens + b.totals.output_tokens)
-            .cmp(&(a.totals.input_tokens + a.totals.output_tokens))
-    });
+    per_model.sort_by_key(|x| std::cmp::Reverse(x.totals.usage.total()));
 
     Ok(DashboardData {
         overall,
@@ -318,12 +300,9 @@ pub fn user_month_summary(
         .into_iter()
         .map(|(key, totals)| ModelBucket { key, totals })
         .collect();
-    per_model.sort_by(|a, b| {
-        (b.totals.input_tokens + b.totals.output_tokens)
-            .cmp(&(a.totals.input_tokens + a.totals.output_tokens))
-    });
+    per_model.sort_by_key(|x| std::cmp::Reverse(x.totals.usage.total()));
 
-    let used = totals.input_tokens + totals.output_tokens;
+    let used = totals.usage.total();
     let remaining_tokens = monthly_token_budget.map(|b| b.saturating_sub(used));
 
     Ok(UserMonthSummary {
@@ -360,7 +339,7 @@ pub fn user_month_token_total(path: impl AsRef<Path>, user: &str) -> std::io::Re
         if rec.user.as_deref() != Some(user) {
             continue;
         }
-        total += rec.input_tokens + rec.output_tokens;
+        total += rec.usage.total();
     }
     Ok(total)
 }
@@ -389,17 +368,17 @@ mod tests {
     fn aggregates_per_user_and_per_day() {
         use serde_json::json;
         let path = write_log(&[
-            json!({"ts":"2026-05-22T10:00:00Z","user":"alice","auth_token":"a","wire_format":"anthropic","model":"sonnet","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input_tokens":100,"output_tokens":50,"cache_read_tokens":0,"cache_creation_tokens":0,"reasoning_tokens":0,"duration_ms":1000,"status":"ok","streaming":false}),
-            json!({"ts":"2026-05-22T11:00:00Z","user":"bob","auth_token":"b","wire_format":"openai_chat","model":"sonnet","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input_tokens":200,"output_tokens":100,"cache_read_tokens":0,"cache_creation_tokens":0,"reasoning_tokens":0,"duration_ms":2000,"status":"ok","streaming":true}),
-            json!({"ts":"2026-05-23T09:00:00Z","user":"alice","auth_token":"a","wire_format":"openai_responses","model":"sonnet","upstream_provider":"DeepSeek","upstream_model":"deepseek-chat","input_tokens":50,"output_tokens":25,"cache_read_tokens":0,"cache_creation_tokens":0,"reasoning_tokens":0,"duration_ms":500,"status":"error","error":"upstream 503","streaming":false}),
+            json!({"ts":"2026-05-22T10:00:00Z","user":"alice","auth_token":"a","wire_format":"anthropic","model":"sonnet","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input":100,"output":50,"cache_read":0,"cache_write_5m":0,"reasoning":0,"duration_ms":1000,"status":"ok","streaming":false}),
+            json!({"ts":"2026-05-22T11:00:00Z","user":"bob","auth_token":"b","wire_format":"openai_chat","model":"sonnet","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input":200,"output":100,"cache_read":0,"cache_write_5m":0,"reasoning":0,"duration_ms":2000,"status":"ok","streaming":true}),
+            json!({"ts":"2026-05-23T09:00:00Z","user":"alice","auth_token":"a","wire_format":"openai_responses","model":"sonnet","upstream_provider":"DeepSeek","upstream_model":"deepseek-chat","input":50,"output":25,"cache_read":0,"cache_write_5m":0,"reasoning":0,"duration_ms":500,"status":"error","error":"upstream 503","streaming":false}),
         ]);
         let data = aggregate(&path, 100, &|_| 0.0).unwrap();
         let _ = std::fs::remove_file(&path);
 
         assert_eq!(data.overall.requests, 3);
         assert_eq!(data.overall.errors, 1);
-        assert_eq!(data.overall.input_tokens, 350);
-        assert_eq!(data.overall.output_tokens, 175);
+        assert_eq!(data.overall.usage.input, 350);
+        assert_eq!(data.overall.usage.output, 175);
 
         assert_eq!(data.per_user.len(), 2);
         // Bob (300 total) > Alice (50+25 = 75 + 100+50 = 175). Wait actually
@@ -428,7 +407,7 @@ mod tests {
     fn falls_back_to_auth_token_when_user_missing() {
         use serde_json::json;
         let path = write_log(&[
-            json!({"ts":"2026-05-22T10:00:00Z","auth_token":"sk-x","wire_format":"anthropic","model":"sonnet","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input_tokens":1,"output_tokens":1,"cache_read_tokens":0,"cache_creation_tokens":0,"reasoning_tokens":0,"duration_ms":1,"status":"ok","streaming":false}),
+            json!({"ts":"2026-05-22T10:00:00Z","auth_token":"sk-x","wire_format":"anthropic","model":"sonnet","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input":1,"output":1,"cache_read":0,"cache_write_5m":0,"reasoning":0,"duration_ms":1,"status":"ok","streaming":false}),
         ]);
         let data = aggregate(&path, 100, &|_| 0.0).unwrap();
         let _ = std::fs::remove_file(&path);

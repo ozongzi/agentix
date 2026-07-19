@@ -17,7 +17,7 @@
 //!      emits `signature_delta`, which the public spec doesn't promise).
 
 use agentix::msg::LlmEvent;
-use agentix::types::UsageStats;
+use agentix::types::Usage;
 use agentix::{
     Content, Message, ReasoningEffort, Request, Tool, ToolBundle, ToolCall, ToolOutput,
     UserContent, tool,
@@ -67,7 +67,7 @@ async fn mimo_complete_text() {
     assert!(!content.is_empty(), "content should be non-empty");
     eprintln!(
         "complete: {content:?} | usage prompt={} completion={} cache_read={}",
-        resp.usage.prompt_tokens, resp.usage.completion_tokens, resp.usage.cache_read_tokens,
+        resp.usage.input, resp.usage.output, resp.usage.cache_read,
     );
 }
 
@@ -89,7 +89,7 @@ async fn mimo_stream_thinking_enabled() {
 
     let mut content = String::new();
     let mut reasoning = String::new();
-    let mut usage: Option<UsageStats> = None;
+    let mut usage: Option<Usage> = None;
     while let Some(ev) = stream.next().await {
         match ev {
             LlmEvent::Token(t) => content.push_str(&t),
@@ -114,7 +114,7 @@ async fn mimo_stream_thinking_enabled() {
     if let Some(u) = usage {
         eprintln!(
             "usage: prompt={} completion={} cache_read={} reasoning={}",
-            u.prompt_tokens, u.completion_tokens, u.cache_read_tokens, u.reasoning_tokens,
+            u.input, u.output, u.cache_read, u.reasoning,
         );
     }
 }
@@ -164,7 +164,7 @@ async fn mimo_multi_turn_tool_loop() {
 
     let mut signatures_round_tripped = false;
     let mut final_text = String::new();
-    let mut total_usage = UsageStats::default();
+    let mut total_usage = Usage::default();
 
     for _ in 0..8 {
         let mut stream = base
@@ -248,10 +248,7 @@ async fn mimo_multi_turn_tool_loop() {
     eprintln!("final answer: {final_text}");
     eprintln!(
         "tool-loop usage: prompt={} completion={} cache_read={} reasoning={}",
-        total_usage.prompt_tokens,
-        total_usage.completion_tokens,
-        total_usage.cache_read_tokens,
-        total_usage.reasoning_tokens,
+        total_usage.input, total_usage.output, total_usage.cache_read, total_usage.reasoning,
     );
     eprintln!("thinking signatures round-tripped: {signatures_round_tripped}");
 }

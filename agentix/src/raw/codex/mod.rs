@@ -21,7 +21,7 @@ use crate::raw::shared::ToolDefinition;
 use crate::request::{
     Content, ImageData, Message, ReasoningEffort, ResponseFormat, ToolCall, ToolChoice,
 };
-use crate::types::{CompleteResponse, FinishReason, ToolCallChunk, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, ToolCallChunk, Usage};
 
 fn image_url_for_turn(img: &crate::request::ImageContent) -> Result<String, ApiError> {
     match &img.data {
@@ -348,18 +348,26 @@ fn output_schema(config: &AgentConfig) -> Option<Value> {
     }
 }
 
-fn parse_usage(value: &Value) -> UsageStats {
+// Codex reports OpenAI-subset semantics (source-confirmed: its
+// `non_cached_input() = input_tokens − cached_input`), so cached, cache-write
+// and reasoning counts are subtracted out into their own buckets. Under a
+// ChatGPT plan there is no per-token billing; with API-key auth OpenAI API
+// rates apply. The CLI reports no dollar cost.
+fn parse_usage(value: &Value) -> Usage {
     let total = value.pointer("/params/tokenUsage/total").unwrap_or(value);
-    let get = |key: &str| total.get(key).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let prompt = get("inputTokens");
-    let completion = get("outputTokens");
-    UsageStats {
-        prompt_tokens: prompt,
-        completion_tokens: completion,
-        total_tokens: get("totalTokens").max(prompt + completion),
-        cache_read_tokens: get("cachedInputTokens"),
-        cache_creation_tokens: 0,
-        reasoning_tokens: get("reasoningOutputTokens"),
+    let get = |key: &str| total.get(key).and_then(|v| v.as_u64()).unwrap_or(0);
+    let cached = get("cachedInputTokens");
+    let cache_write = get("cacheWriteInputTokens");
+    let reasoning = get("reasoningOutputTokens");
+    Usage {
+        input: get("inputTokens")
+            .saturating_sub(cached)
+            .saturating_sub(cache_write),
+        cache_read: cached,
+        cache_write_5m: cache_write,
+        output: get("outputTokens").saturating_sub(reasoning),
+        reasoning,
+        ..Default::default()
     }
 }
 
@@ -441,7 +449,7 @@ pub(crate) async fn stream_codex(
         let child = child;
         let mut stdin = stdin;
         let mut lines = lines;
-        let mut usage = UsageStats::default();
+        let mut usage = Usage::default();
         let mut raw_items: Vec<Value> = Vec::new();
 
         loop {
@@ -501,7 +509,7 @@ pub(crate) async fn stream_codex(
                         let err = msg.pointer("/params/turn/error").cloned().unwrap_or(Value::Null);
                         yield LlmEvent::Error(format!("codex turn failed: {err}"));
                     } else {
-                        if usage.total_tokens != 0 {
+                        if usage.total() != 0 {
                             yield LlmEvent::Usage(usage.clone());
                         }
                         if !raw_items.is_empty() {
@@ -540,7 +548,7 @@ pub(crate) async fn complete_codex(
     let mut content = String::new();
     let mut tool_calls = Vec::new();
     let mut provider_data = None;
-    let mut usage = UsageStats::default();
+    let mut usage = Usage::default();
 
     while let Some(ev) = stream.next().await {
         match ev {

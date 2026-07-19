@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::msg::LlmEvent;
 use crate::raw::anthropic::response as wire;
-use crate::types::{CompleteResponse, FinishReason, UsageStats};
+use crate::types::{CompleteResponse, FinishReason, Usage};
 
 // ── Non-streaming: CompleteResponse → Anthropic JSON Response ────────────────
 
@@ -82,12 +82,15 @@ pub fn build_response_body(
     })
 }
 
-fn usage_to_json(u: &UsageStats) -> Value {
+// Anthropic wire semantics are additive — `input_tokens` excludes cache
+// tokens — which matches the disjoint buckets directly. Reasoning folds into
+// `output_tokens` (Anthropic bills thinking as ordinary output).
+fn usage_to_json(u: &Usage) -> Value {
     json!({
-        "input_tokens": u.prompt_tokens,
-        "output_tokens": u.completion_tokens,
-        "cache_read_input_tokens": u.cache_read_tokens,
-        "cache_creation_input_tokens": u.cache_creation_tokens,
+        "input_tokens": u.fresh_input(),
+        "output_tokens": u.total_output(),
+        "cache_read_input_tokens": u.cache_read,
+        "cache_creation_input_tokens": u.cache_write(),
     })
 }
 
@@ -118,7 +121,7 @@ pub struct SseState {
     pending_close_thinking: bool,
     next_index: u32,
     message_started: bool,
-    last_usage: Option<UsageStats>,
+    last_usage: Option<Usage>,
     has_tool_use: bool,
     open_tool_use_ids: HashSet<String>,
     model: String,
@@ -161,7 +164,7 @@ impl SseState {
                         "content": [],
                         "stop_reason": Value::Null,
                         "stop_sequence": Value::Null,
-                        "usage": usage_to_json(&UsageStats::default()),
+                        "usage": usage_to_json(&Usage::default()),
                     }
                 }),
             ));

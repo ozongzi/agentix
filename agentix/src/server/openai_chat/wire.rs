@@ -272,15 +272,19 @@ pub struct PromptTokensDetails {
     pub cached_tokens: u32,
 }
 
-impl From<&crate::types::UsageStats> for Usage {
-    fn from(u: &crate::types::UsageStats) -> Self {
+// Denormalize the disjoint buckets back into OpenAI wire semantics: an
+// OpenAI-chat client expects `prompt_tokens` to INCLUDE cached tokens (with
+// `cached_tokens` as a subset detail) and `completion_tokens` to include
+// reasoning.
+impl From<&crate::types::Usage> for Usage {
+    fn from(u: &crate::types::Usage) -> Self {
         Usage {
-            prompt_tokens: u.prompt_tokens as u32,
-            completion_tokens: u.completion_tokens as u32,
-            total_tokens: u.total_tokens as u32,
-            prompt_tokens_details: if u.cache_read_tokens > 0 {
+            prompt_tokens: u.total_input() as u32,
+            completion_tokens: u.total_output() as u32,
+            total_tokens: u.total() as u32,
+            prompt_tokens_details: if u.cache_read > 0 {
                 Some(PromptTokensDetails {
-                    cached_tokens: u.cache_read_tokens as u32,
+                    cached_tokens: u.cache_read as u32,
                 })
             } else {
                 None

@@ -4,11 +4,18 @@
 //! writes one JSON line to the configured log file. The schema is stable so
 //! downstream tools (cron parsers, billing scripts) can rely on it.
 //!
+//! Token fields carry agentix's normalized **disjoint-bucket** semantics
+//! (see [`crate::types::Usage`], flattened into the record): `input` is
+//! *uncached* input only, `output` excludes reasoning, and every bucket is
+//! billed independently — `cost = Σ bucket × rate` with no overlap. This is
+//! a schema change from pre-0.28 logs, whose `input_tokens`/`output_tokens`
+//! carried whatever overlapping semantics the upstream used.
+//!
 //! ```jsonl
-//! {"ts":"2026-05-23T10:30:00Z","auth_token":"sk-relay-abc","wire_format":"anthropic","model":"claude-sonnet-4-5","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input_tokens":123,"output_tokens":456,"cache_read_tokens":0,"cache_creation_tokens":0,"reasoning_tokens":0,"duration_ms":1234,"status":"ok","error":null,"streaming":true}
+//! {"ts":"2026-05-23T10:30:00Z","auth_token":"sk-relay-abc","wire_format":"anthropic","model":"claude-sonnet-4-5","upstream_provider":"ClaudeCode","upstream_model":"sonnet","input":123,"cache_read":9000,"cache_write_5m":0,"output":456,"reasoning":0,"duration_ms":1234,"status":"ok","error":null,"streaming":true}
 //! ```
 //!
-//! Token counts come from agentix's `UsageStats` (which is populated from the
+//! Token counts come from agentix's `Usage` (which is populated from the
 //! upstream's `usage` field when it provides one). For upstreams that don't
 //! report usage, all token fields are zero — caller can detect this and use
 //! `estimate_tokens()` as a fallback if desired.
@@ -23,7 +30,7 @@ use serde::Serialize;
 
 use crate::msg::LlmEvent;
 use crate::request::Provider;
-use crate::types::UsageStats;
+use crate::types::Usage;
 
 use super::fallback::CommittedUpstream;
 
@@ -49,11 +56,12 @@ pub struct UsageRecord {
     /// Model name sent to the upstream (after any `--model` override). `None`
     /// if upstream commit never happened.
     pub upstream_model: Option<String>,
-    pub input_tokens: usize,
-    pub output_tokens: usize,
-    pub cache_read_tokens: usize,
-    pub cache_creation_tokens: usize,
-    pub reasoning_tokens: usize,
+    /// Normalized disjoint-bucket usage, flattened into the record: `input`
+    /// (uncached), `cache_read`, `cache_write_5m`/`_1h`, `output` (excl.
+    /// reasoning), `reasoning`, modality buckets when non-zero, and
+    /// `reported_cost` when the upstream reported one.
+    #[serde(flatten)]
+    pub usage: Usage,
     pub duration_ms: u64,
     /// `"ok"` if the request reached `Done` cleanly; `"error"` if it ended
     /// with `LlmEvent::Error` or all-upstreams-failed.
@@ -73,7 +81,7 @@ impl UsageRecord {
             user: None,
             upstream_provider: None,
             upstream_model: None,
-            usage: UsageStats::default(),
+            usage: Usage::default(),
             duration_ms: 0,
             status: "ok",
             error: None,
@@ -90,7 +98,7 @@ pub struct UsageRecordBuilder {
     user: Option<String>,
     upstream_provider: Option<Provider>,
     upstream_model: Option<String>,
-    usage: UsageStats,
+    usage: Usage,
     duration_ms: u64,
     status: &'static str,
     error: Option<String>,
@@ -111,7 +119,7 @@ impl UsageRecordBuilder {
         self.upstream_model = Some(model.into());
         self
     }
-    pub fn usage(mut self, u: UsageStats) -> Self {
+    pub fn usage(mut self, u: Usage) -> Self {
         self.usage = u;
         self
     }
@@ -142,11 +150,7 @@ impl UsageRecordBuilder {
             model: self.model,
             upstream_provider: self.upstream_provider.map(format_provider),
             upstream_model: self.upstream_model,
-            input_tokens: self.usage.prompt_tokens,
-            output_tokens: self.usage.completion_tokens,
-            cache_read_tokens: self.usage.cache_read_tokens,
-            cache_creation_tokens: self.usage.cache_creation_tokens,
-            reasoning_tokens: self.usage.reasoning_tokens,
+            usage: self.usage,
             duration_ms: self.duration_ms,
             status: self.status,
             error: self.error,
@@ -275,7 +279,7 @@ pub struct UsageTracker {
     user: Option<String>,
     streaming: bool,
     committed: Option<CommittedUpstream>,
-    last_usage: UsageStats,
+    last_usage: Usage,
     status: &'static str,
     error: Option<String>,
 }
@@ -297,7 +301,7 @@ impl UsageTracker {
             user: None,
             streaming,
             committed: None,
-            last_usage: UsageStats::default(),
+            last_usage: Usage::default(),
             status: "ok",
             error: None,
         }
@@ -311,7 +315,7 @@ impl UsageTracker {
         self.committed = Some(c);
     }
 
-    pub fn set_usage(&mut self, u: UsageStats) {
+    pub fn set_usage(&mut self, u: Usage) {
         self.last_usage = u;
     }
 
@@ -436,10 +440,9 @@ mod tests {
         let rec = UsageRecord::builder("anthropic", "claude-sonnet-4-5")
             .auth_token(Some("sk-relay-test".into()))
             .upstream(Provider::Anthropic, "claude-sonnet-4-5")
-            .usage(UsageStats {
-                prompt_tokens: 100,
-                completion_tokens: 50,
-                total_tokens: 150,
+            .usage(Usage {
+                input: 100,
+                output: 50,
                 ..Default::default()
             })
             .duration_ms(2000)
@@ -458,8 +461,8 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         assert_eq!(parsed["auth_token"], "sk-relay-test");
         assert_eq!(parsed["wire_format"], "anthropic");
-        assert_eq!(parsed["input_tokens"], 100);
-        assert_eq!(parsed["output_tokens"], 50);
+        assert_eq!(parsed["input"], 100);
+        assert_eq!(parsed["output"], 50);
         assert_eq!(parsed["status"], "ok");
         assert_eq!(parsed["streaming"], true);
         assert_eq!(parsed["upstream_provider"], "Anthropic");

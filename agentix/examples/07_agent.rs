@@ -94,10 +94,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("← [{name}] = {text}");
             }
             AgentEvent::Usage(u) => {
-                eprintln!("\n[tokens: {}]", u.total_tokens);
+                eprintln!("\n[tokens: {}]", u.total());
             }
             AgentEvent::Done(total) => {
-                eprintln!("\n[total tokens: {}]", total.total_tokens);
+                eprintln!("\n[total tokens: {}]", total.total());
             }
             AgentEvent::Warning(w) => eprintln!("\n[warn] {w}"),
             AgentEvent::Error(e) => {

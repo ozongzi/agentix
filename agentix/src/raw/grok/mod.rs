@@ -12,7 +12,7 @@ use crate::provider::{PostConfig, post_json, post_streaming};
 use crate::raw::shared::ToolDefinition;
 use crate::request::{Message, ToolCall, ToolChoice};
 use crate::types::{
-    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, UsageStats,
+    CompleteResponse, FinishReason, PartialToolCall, StreamBufs, ToolCallChunk, Usage,
 };
 
 use request::build_grok_request;
@@ -142,7 +142,7 @@ pub(crate) async fn complete_grok(
             })
             .unwrap_or_default(),
         provider_data: None,
-        usage: raw.usage.map(UsageStats::from).unwrap_or_default(),
+        usage: raw.usage.map(Usage::from).unwrap_or_default(),
         finish_reason: finish_reason.unwrap_or_default(),
     })
 }
@@ -150,7 +150,7 @@ pub(crate) async fn complete_grok(
 fn parse_chunk(chunk: StreamChunk, bufs: &mut StreamBufs) -> Vec<LlmEvent> {
     let mut events = Vec::new();
     if let Some(u) = chunk.usage {
-        events.push(LlmEvent::Usage(UsageStats::from(u)));
+        events.push(LlmEvent::Usage(Usage::from(u)));
     }
     let choice = match chunk.choices.into_iter().next() {
         Some(c) => c,

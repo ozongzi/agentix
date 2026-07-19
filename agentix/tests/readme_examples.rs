@@ -105,7 +105,7 @@ fn llm_event_variants_exist() {
         name: "f".into(),
         arguments: "{}".into(),
     });
-    let _ = LlmEvent::Usage(agentix::UsageStats::default());
+    let _ = LlmEvent::Usage(agentix::Usage::default());
     let _ = LlmEvent::Done;
     let _ = LlmEvent::Error("err".into());
     let _ = LlmEvent::ToolCallChunk(agentix::types::ToolCallChunk {

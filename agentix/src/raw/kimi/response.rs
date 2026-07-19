@@ -51,20 +51,35 @@ pub struct Usage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub total_tokens: u32,
+    /// Current Kimi docs put `cached_tokens` at the TOP LEVEL of `usage`
+    /// ("Number of tokens served from cache"), not under
+    /// `prompt_tokens_details`.
+    #[serde(default)]
+    pub cached_tokens: u32,
+    /// OpenAI-style nested location, kept for compatibility with older
+    /// responses / proxies.
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
 }
 
-impl From<Usage> for crate::types::UsageStats {
+// Kimi billing semantics: cached tokens are a subset of `prompt_tokens`
+// (cost = cached × hit-price + (prompt − cached) × input-price + output).
+// Caching is automatic with no write or storage fee (the old explicit
+// context-caching API with creation + per-minute storage charges is gone
+// from current docs). K3 reasoning is billed inside output.
+impl From<Usage> for crate::types::Usage {
     fn from(u: Usage) -> Self {
+        let cached = if u.cached_tokens > 0 {
+            u.cached_tokens as u64
+        } else {
+            u.prompt_tokens_details
+                .map(|d| d.cached_tokens as u64)
+                .unwrap_or(0)
+        };
         Self {
-            prompt_tokens: u.prompt_tokens as usize,
-            completion_tokens: u.completion_tokens as usize,
-            total_tokens: u.total_tokens as usize,
-            cache_read_tokens: u
-                .prompt_tokens_details
-                .map(|d| d.cached_tokens as usize)
-                .unwrap_or(0),
+            input: (u.prompt_tokens as u64).saturating_sub(cached),
+            cache_read: cached,
+            output: u.completion_tokens as u64,
             ..Default::default()
         }
     }

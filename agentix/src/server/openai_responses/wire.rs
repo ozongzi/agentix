@@ -251,17 +251,20 @@ pub struct OutputTokensDetails {
     pub reasoning_tokens: u32,
 }
 
-impl From<&crate::types::UsageStats> for Usage {
-    fn from(u: &crate::types::UsageStats) -> Self {
+// Denormalize the disjoint buckets back into Responses-API wire semantics:
+// `input_tokens` includes cached tokens (subset detail), `output_tokens`
+// includes reasoning (subset detail).
+impl From<&crate::types::Usage> for Usage {
+    fn from(u: &crate::types::Usage) -> Self {
         Usage {
-            input_tokens: u.prompt_tokens as u32,
-            output_tokens: u.completion_tokens as u32,
-            total_tokens: u.total_tokens as u32,
+            input_tokens: u.total_input() as u32,
+            output_tokens: u.total_output() as u32,
+            total_tokens: u.total() as u32,
             input_tokens_details: InputTokensDetails {
-                cached_tokens: u.cache_read_tokens as u32,
+                cached_tokens: u.cache_read as u32,
             },
             output_tokens_details: OutputTokensDetails {
-                reasoning_tokens: u.reasoning_tokens as u32,
+                reasoning_tokens: u.reasoning as u32,
             },
         }
     }

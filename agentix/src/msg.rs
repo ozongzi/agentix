@@ -1,5 +1,5 @@
 use crate::request::ToolCall;
-use crate::types::UsageStats;
+use crate::types::Usage;
 
 // ── LLM Provider Events ──────────────────────────────────────────────────────
 
@@ -28,7 +28,7 @@ pub enum LlmEvent {
     /// Other providers may never emit this.
     AssistantState(serde_json::Value),
     /// Usage statistics (usually sent at the end).
-    Usage(UsageStats),
+    Usage(Usage),
     /// The stream has ended.
     Done,
     /// A provider-level error.
