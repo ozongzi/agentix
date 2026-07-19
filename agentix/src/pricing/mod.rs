@@ -146,9 +146,14 @@ impl PriceSheet {
             .expect("PriceSheet must have at least one tier")
     }
 
-    /// Price a request. Estimation always runs; a provider-reported cost in a
-    /// matching currency takes precedence for [`Cost::total`].
-    pub fn cost(&self, usage: &Usage) -> Cost {
+    /// Price a request. Estimation always runs; a provider-reported cost
+    /// takes precedence for [`Cost::total`].
+    ///
+    /// Errors when a reported cost exists but cannot be interpreted (unknown
+    /// ISO currency code, non-finite amount) — never silently discarded: the
+    /// caller decides whether to surface it or knowingly use
+    /// [`Cost::estimated`] from a sheet-only pricing pass.
+    pub fn cost(&self, usage: &Usage) -> Result<Cost, CostError> {
         let rates = self.rates_for(usage.total_input());
         let per_tok = |tokens: u64, per_million: Decimal| {
             Decimal::from(tokens) * per_million / Decimal::from(MILLION)
@@ -184,15 +189,28 @@ impl PriceSheet {
         let uncached_equivalent = estimated - cache_read - cache_write
             + per_tok(usage.cache_read + usage.cache_write(), rates.input);
 
-        // A provider-reported figure is authoritative when we can express it
-        // in a known currency.
-        let reported = usage.reported_cost.as_ref().and_then(|r| {
-            let currency = iso::find(&r.currency)?;
-            let amount = Decimal::try_from(r.amount).ok()?;
-            Some(Money::from_decimal(amount, currency))
-        });
+        // A provider-reported figure is authoritative. Failing to interpret
+        // it is an error, not a fallback — a billing path must not quietly
+        // substitute an estimate for the provider's own number.
+        let reported = match usage.reported_cost.as_ref() {
+            None => None,
+            Some(r) => {
+                let currency =
+                    iso::find(&r.currency).ok_or_else(|| CostError::UnknownCurrency {
+                        code: r.currency.clone(),
+                        amount: r.amount,
+                    })?;
+                let amount = Decimal::try_from(r.amount).map_err(|_| {
+                    CostError::UnrepresentableAmount {
+                        currency: r.currency.clone(),
+                        amount: r.amount,
+                    }
+                })?;
+                Some(Money::from_decimal(amount, currency))
+            }
+        };
 
-        Cost {
+        Ok(Cost {
             currency: self.currency,
             input,
             input_image,
@@ -208,8 +226,20 @@ impl PriceSheet {
             estimated,
             uncached_equivalent,
             reported,
-        }
+        })
     }
+}
+
+/// A provider-reported cost was present but could not be interpreted.
+/// Deliberately fatal for the pricing pass — see [`PriceSheet::cost`].
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum CostError {
+    /// The reported currency code is not a known ISO-4217 code.
+    #[error("reported cost {amount} in unknown currency {code:?}")]
+    UnknownCurrency { code: String, amount: f64 },
+    /// The reported amount is not representable as a decimal (NaN/∞).
+    #[error("reported cost {amount} in {currency} is not representable")]
+    UnrepresentableAmount { currency: String, amount: f64 },
 }
 
 /// The cost of one request (or an aggregate), broken out by bucket.
@@ -302,7 +332,7 @@ mod tests {
             reasoning: 1_000_000,
             ..Default::default()
         };
-        let c = usd_sheet().cost(&u);
+        let c = usd_sheet().cost(&u).unwrap();
         assert_eq!(c.input, dec("3"));
         assert_eq!(c.cache_read, dec("0.30"));
         assert_eq!(c.cache_write, dec("9.75")); // 3.75 + 6
@@ -319,7 +349,7 @@ mod tests {
             output: 0,
             ..Default::default()
         };
-        let c = usd_sheet().cost(&u);
+        let c = usd_sheet().cost(&u).unwrap();
         // Uncached: 1M × $3 = $3; actual: $0.30 → saved $2.70.
         assert_eq!(
             c.cache_savings(),
@@ -349,7 +379,7 @@ mod tests {
             output: 1000,
             ..Default::default()
         };
-        let c = sheet.cost(&u);
+        let c = sheet.cost(&u).unwrap();
         assert_eq!(c.input, dec("0.6")); // 150k × $4/1M
         // 100k fresh → low tier.
         let u2 = Usage {
@@ -357,7 +387,26 @@ mod tests {
             output: 1000,
             ..Default::default()
         };
-        assert_eq!(sheet.cost(&u2).input, dec("0.2"));
+        assert_eq!(sheet.cost(&u2).unwrap().input, dec("0.2"));
+    }
+
+    #[test]
+    fn unknown_reported_currency_is_an_error_not_a_fallback() {
+        let u = Usage {
+            input: 1_000_000,
+            reported_cost: Some(crate::types::ReportedCost {
+                amount: 1.0,
+                currency: "CREDITS".into(),
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            usd_sheet().cost(&u),
+            Err(CostError::UnknownCurrency {
+                code: "CREDITS".into(),
+                amount: 1.0
+            })
+        );
     }
 
     #[test]
@@ -370,7 +419,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let c = usd_sheet().cost(&u);
+        let c = usd_sheet().cost(&u).unwrap();
         assert!(c.is_reported());
         assert_eq!(c.total(), Money::from_decimal(dec("1.23"), iso::USD));
         assert_eq!(c.estimated(), Money::from_decimal(dec("3"), iso::USD));

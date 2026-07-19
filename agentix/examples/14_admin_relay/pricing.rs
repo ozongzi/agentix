@@ -170,23 +170,34 @@ impl PricingHandle {
     }
 }
 
-/// Build the per-record pricer the aggregator wants. Preference order:
+/// Build the per-record pricer the aggregator wants. The dashboard is
+/// USD-denominated, so:
 ///
-/// 1. the record's provider-reported cost (authoritative, e.g. OpenRouter's
-///    `usage.cost`) — used regardless of route configuration;
-/// 2. estimate from the route's configured `pricing_model` against the
-///    OpenRouter catalog.
-///
-/// Records with neither cost $0.
+/// 1. a USD provider-reported cost (e.g. OpenRouter's `usage.cost`) is
+///    authoritative — used regardless of route configuration;
+/// 2. a reported cost in any other currency cannot be summed into a USD
+///    total: it is logged loudly and the record prices at $0 — never
+///    silently converted or replaced with an estimate;
+/// 3. records with no reported cost are estimated from the route's
+///    configured `pricing_model` against the OpenRouter catalog (USD);
+///    no sheet / no route → $0.
 pub fn record_pricer(
     pricing: PricingHandle,
     routes: crate::routes::RoutesHandle,
 ) -> impl Fn(&crate::aggregate::LoggedRecord) -> f64 {
     move |r| {
-        if let Some(cost) = &r.usage.reported_cost
-            && cost.currency == "USD"
-        {
-            return cost.amount;
+        if let Some(cost) = &r.usage.reported_cost {
+            if cost.currency == "USD" {
+                return cost.amount;
+            }
+            warn!(
+                currency = %cost.currency,
+                amount = cost.amount,
+                model = r.upstream_model.as_deref().unwrap_or(""),
+                "reported cost in non-USD currency — not summable into the \
+                 USD dashboard; record priced at $0"
+            );
+            return 0.0;
         }
         let Some(model) = r.upstream_model.as_deref() else {
             return 0.0;
@@ -195,7 +206,14 @@ pub fn record_pricer(
             .pricing_model_for(model)
             .and_then(|pm| pricing.sheet(&pm))
         {
-            Some(sheet) => sheet.cost(&r.usage).total().to_f64_lossy(),
+            // No reported cost on the record, so cost() cannot error.
+            Some(sheet) => match sheet.cost(&r.usage) {
+                Ok(c) => c.total().to_f64_lossy(),
+                Err(e) => {
+                    warn!(error = %e, "unpriceable record");
+                    0.0
+                }
+            },
             None => 0.0,
         }
     }
