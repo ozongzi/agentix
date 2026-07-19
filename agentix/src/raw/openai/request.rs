@@ -282,6 +282,7 @@ pub(crate) fn build_responses_request(
     }
 }
 
+#[cfg_attr(not(feature = "codex"), allow(dead_code))]
 pub(crate) fn build_response_input_items(
     config: &AgentConfig,
     history: Vec<Message>,

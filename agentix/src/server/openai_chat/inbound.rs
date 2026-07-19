@@ -1,7 +1,6 @@
 //! Translate an inbound Chat Completions wire request into agentix's
 //! internal `Request` + `Vec<Message>` representation.
 
-use serde_json::Value;
 
 use crate::raw::shared::{FunctionDefinition, ToolDefinition, ToolKind};
 use crate::request::{
@@ -239,10 +238,6 @@ fn parse_reasoning_effort(s: &str) -> Option<ReasoningEffort> {
         _ => return None,
     })
 }
-
-// suppress warning: extra is read via flatten then iterated
-#[allow(dead_code)]
-fn _silence_value_use(_: &Value) {}
 
 #[cfg(test)]
 mod tests {
