@@ -59,7 +59,7 @@ cli = [
 [dependencies]
 async-stream = "0.3"
 async-trait = "0.1"
-agentix-macros = { version = "0.5.1", path = "../agentix-macros" }
+agentix-macros = { version = "0.6.0", path = "../agentix-macros" }
 eventsource-stream = "0.2.3"
 futures = "0.3.31"
 reqwest = { version = "0.13", features = ["json", "stream"] }
