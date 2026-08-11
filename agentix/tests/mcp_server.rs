@@ -3,6 +3,9 @@
 #![cfg(feature = "mcp-server")]
 
 use agentix::{McpServer, ToolBundle, tool, tool_trait::Tool};
+use futures::StreamExt as _;
+use schemars::JsonSchema;
+use serde::Serialize;
 
 // ── Test Tools ────────────────────────────────────────────────────────────────
 
@@ -91,4 +94,141 @@ fn mcp_server_builder_chaining() {
         .with_version("2.0.0-beta");
 
     let _ = server;
+}
+
+// ── isError / structuredContent / outputSchema ───────────────────────────────
+
+#[derive(Serialize, JsonSchema)]
+struct Stats {
+    count: usize,
+}
+
+struct ResultTool;
+
+#[tool]
+impl Tool for ResultTool {
+    /// Divide a by b.
+    /// a: dividend
+    /// b: divisor
+    async fn divide(&self, a: f64, b: f64) -> Result<f64, String> {
+        if b == 0.0 {
+            Err("division by zero".into())
+        } else {
+            Ok(a / b)
+        }
+    }
+
+    /// Return a struct.
+    /// n: how many
+    async fn stats(&self, n: usize) -> Stats {
+        Stats { count: n }
+    }
+
+    /// Return opaque content blocks.
+    async fn blocks(&self) -> Vec<agentix::Content> {
+        vec![agentix::Content::text("hi")]
+    }
+}
+
+async fn run(tool: &impl Tool, name: &str, args: serde_json::Value) -> agentix::ToolResult {
+    let mut stream = tool.call(name, args).await;
+    let mut last = agentix::ToolResult::ok(vec![]);
+    while let Some(ev) = stream.next().await {
+        if let Some(r) = ev.into_result() {
+            last = r;
+        }
+    }
+    last
+}
+
+#[tokio::test]
+async fn err_variant_is_flagged_as_error() {
+    let result = run(
+        &ResultTool,
+        "divide",
+        serde_json::json!({"a": 1.0, "b": 0.0}),
+    )
+    .await;
+    assert!(result.is_error, "Err(_) must surface as isError: true");
+    assert!(result.structured.is_none());
+}
+
+#[tokio::test]
+async fn bad_arguments_are_flagged_as_error() {
+    let result = run(&ResultTool, "divide", serde_json::json!({"a": "nope"})).await;
+    assert!(
+        result.is_error,
+        "argument deserialization failures must surface as isError: true"
+    );
+}
+
+#[tokio::test]
+async fn unknown_tool_is_flagged_as_error() {
+    let bundle = ToolBundle::new().with(CalcTool);
+    let result = run(&bundle, "nonexistent", serde_json::json!({})).await;
+    assert!(result.is_error);
+}
+
+#[tokio::test]
+async fn ok_variant_carries_structured_content() {
+    let result = run(
+        &ResultTool,
+        "divide",
+        serde_json::json!({"a": 6.0, "b": 2.0}),
+    )
+    .await;
+    assert!(!result.is_error);
+    // Scalars are wrapped so structuredContent is always an object.
+    assert_eq!(result.structured, Some(serde_json::json!({"result": 3.0})));
+}
+
+#[tokio::test]
+async fn struct_return_is_structured_verbatim() {
+    let result = run(&ResultTool, "stats", serde_json::json!({"n": 7})).await;
+    assert_eq!(result.structured, Some(serde_json::json!({"count": 7})));
+}
+
+#[tokio::test]
+async fn content_returns_have_no_structured_payload() {
+    let result = run(&ResultTool, "blocks", serde_json::json!({})).await;
+    assert!(!result.is_error);
+    assert!(
+        result.structured.is_none(),
+        "Vec<Content> is opaque and must not be structured"
+    );
+}
+
+#[test]
+fn output_schemas_wrap_scalars_and_pass_objects_through() {
+    let schemas = ResultTool.output_schemas();
+
+    // `Result<f64, _>` — schema of the Ok type, wrapped because it is a scalar.
+    assert_eq!(
+        schemas.get("divide"),
+        Some(&serde_json::json!({
+            "type": "object",
+            "properties": { "result": { "type": "number", "format": "double" } },
+            "required": ["result"],
+        }))
+    );
+
+    // A struct is already an object, so it is used as-is.
+    let stats = schemas.get("stats").expect("stats needs an output schema");
+    assert_eq!(stats["type"], "object");
+    assert_eq!(stats["properties"]["count"]["type"], "integer");
+
+    // `Vec<Content>` has no JsonSchema and must not claim one.
+    assert!(
+        !schemas.contains_key("blocks"),
+        "opaque content must not declare an outputSchema"
+    );
+}
+
+#[test]
+fn bundles_merge_output_schemas_from_children() {
+    let bundle = ToolBundle::new().with(CalcTool).with(ResultTool);
+    let schemas = bundle.output_schemas();
+    assert!(schemas.contains_key("add"));
+    assert!(schemas.contains_key("divide"));
+    assert!(schemas.contains_key("stats"));
 }

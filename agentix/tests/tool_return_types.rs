@@ -4,8 +4,8 @@
 //! These live in `tests/` (integration test harness) so the generated code's
 //! `agentix::` paths resolve correctly.
 
+use agentix::tool;
 use agentix::tool_trait::Tool;
-use agentix::{ToolOutput, tool};
 use futures::StreamExt;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -134,8 +134,8 @@ async fn call(tool: &impl Tool, name: &str, args: Value) -> Vec<agentix::Content
     let mut stream = tool.call(name, args).await;
     let mut last_res = vec![];
     while let Some(ev) = stream.next().await {
-        if let ToolOutput::Result(v) = ev {
-            last_res = v;
+        if let Some(r) = ev.into_result() {
+            last_res = r.content;
         }
     }
     last_res

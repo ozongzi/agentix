@@ -19,8 +19,7 @@
 use agentix::msg::LlmEvent;
 use agentix::types::Usage;
 use agentix::{
-    Content, Message, ReasoningEffort, Request, Tool, ToolBundle, ToolCall, ToolOutput,
-    UserContent, tool,
+    Content, Message, ReasoningEffort, Request, Tool, ToolBundle, ToolCall, UserContent, tool,
 };
 use futures::StreamExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -226,8 +225,8 @@ async fn mimo_multi_turn_tool_loop() {
             let mut out = bundle.call(&tc.name, args).await;
             let mut content: Vec<Content> = vec![];
             while let Some(o) = out.next().await {
-                if let ToolOutput::Result(v) = o {
-                    content = v;
+                if let Some(r) = o.into_result() {
+                    content = r.content;
                 }
             }
             history.push(Message::ToolResult {

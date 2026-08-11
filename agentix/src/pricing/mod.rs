@@ -200,12 +200,11 @@ impl PriceSheet {
                         code: r.currency.clone(),
                         amount: r.amount,
                     })?;
-                let amount = Decimal::try_from(r.amount).map_err(|_| {
-                    CostError::UnrepresentableAmount {
+                let amount =
+                    Decimal::try_from(r.amount).map_err(|_| CostError::UnrepresentableAmount {
                         currency: r.currency.clone(),
                         amount: r.amount,
-                    }
-                })?;
+                    })?;
                 Some(Money::from_decimal(amount, currency))
             }
         };

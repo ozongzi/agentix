@@ -1,7 +1,6 @@
 //! Translate an inbound Chat Completions wire request into agentix's
 //! internal `Request` + `Vec<Message>` representation.
 
-
 use crate::raw::shared::{FunctionDefinition, ToolDefinition, ToolKind};
 use crate::request::{
     Content, ImageContent, ImageData, Message, ReasoningEffort, ToolCall, ToolChoice, UserContent,

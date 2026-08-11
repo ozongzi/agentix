@@ -432,13 +432,17 @@ impl Tool for McpTool {
                 Ok(r) => r,
                 Err(e) => {
                     error!(tool = %name_str, "MCP tool call task panicked: {e}");
-                    yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(format!("{{\"error\":\"{e}\"}}"))]);
+                    yield crate::tool_trait::ToolOutput::Outcome(crate::tool_trait::ToolResult::error_text(e));
                     return;
                 }
             };
 
             match result {
                 Ok(result) => {
+                    // Preserve the remote server's error flag and structured
+                    // payload rather than flattening everything to a success.
+                    let remote_error = result.is_error.unwrap_or(false);
+                    let remote_structured = result.structured_content.clone();
                     let mut contents: Vec<Value> = result
                         .content
                         .into_iter()
@@ -471,7 +475,11 @@ impl Tool for McpTool {
                         } else {
                             json_string
                         };
-                        yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(text)]);
+                        yield crate::tool_trait::ToolOutput::Outcome(crate::tool_trait::ToolResult {
+                            content: vec![crate::request::Content::text(text)],
+                            structured: remote_structured,
+                            is_error: remote_error,
+                        });
                     } else {
                         let result_value = match contents.len() {
                             0 => serde_json::json!({ "result": null }),
@@ -490,12 +498,16 @@ impl Tool for McpTool {
                         } else {
                             json_string
                         };
-                        yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(text)]);
+                        yield crate::tool_trait::ToolOutput::Outcome(crate::tool_trait::ToolResult {
+                            content: vec![crate::request::Content::text(text)],
+                            structured: remote_structured,
+                            is_error: remote_error,
+                        });
                     }
                 }
                 Err(e) => {
                     error!(tool = %name_str, error = %e, "MCP tool call failed");
-                    yield crate::tool_trait::ToolOutput::Result(vec![crate::request::Content::text(format!("{{\"error\":\"{e}\"}}"))]);
+                    yield crate::tool_trait::ToolOutput::Outcome(crate::tool_trait::ToolResult::error_text(e));
                 }
             }
         };

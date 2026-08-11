@@ -63,7 +63,7 @@ pub use request::{
     ReasoningEffort, Request, ResponseFormat, ToolCall, ToolChoice, UserContent,
     truncate_to_token_budget,
 };
-pub use tool_trait::{Tool, ToolBundle, ToolOutput};
+pub use tool_trait::{Tool, ToolBundle, ToolOutput, ToolResult};
 pub use types::{CompleteResponse, FinishReason, Usage};
 
 pub use agentix_macros::tool;

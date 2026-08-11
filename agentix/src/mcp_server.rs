@@ -9,22 +9,20 @@
 //!
 //! # Usage
 //!
-//! [`McpServer`] allows you to expose any [`ToolBundle`] (or individual [`Tool`]s)
-//! as an MCP server. This is useful for building custom tool sets that can
-//! be consumed by Claude Desktop, MCP Studio, or other `agentix` agents.
+//! [`McpServer`] exposes any [`Tool`] — a single one, several combined with
+//! `+`, or a whole [`ToolBundle`] — as an MCP server, so it can be consumed by
+//! Claude Desktop, MCP Studio, or other `agentix` agents.
 //!
 //! ## Stdio server
 //!
-//! Expose tools over stdin/stdout:
+//! Expose tools over stdin/stdout — this is how MCP clients spawn servers:
 //!
 //! ```no_run
-//! # use agentix::{McpServer, ToolBundle, tool};
+//! # use agentix::{McpServer, tool};
 //! # struct Calc;
 //! # #[tool] impl agentix::Tool for Calc { async fn add(&self, a: f64, b: f64) -> f64 { a + b } }
 //! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! McpServer::new(ToolBundle::new().with(Calc))
-//!     .serve_stdio()
-//!     .await?;
+//! McpServer::new(Calc).serve_stdio().await?;
 //! # Ok(()) }
 //! ```
 //!
@@ -33,15 +31,29 @@
 //! Expose tools over HTTP (Streamable HTTP transport):
 //!
 //! ```no_run
-//! # use agentix::{McpServer, ToolBundle, tool};
+//! # use agentix::{McpServer, tool};
 //! # struct Calc;
 //! # #[tool] impl agentix::Tool for Calc { async fn add(&self, a: f64, b: f64) -> f64 { a + b } }
+//! # struct Files;
+//! # #[tool] impl agentix::Tool for Files { async fn ls(&self) -> String { String::new() } }
 //! # #[tokio::main] async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! McpServer::new(ToolBundle::new().with(Calc))
+//! McpServer::new(Calc + Files)
 //!     .serve_http(("0.0.0.0", 3001))
 //!     .await?;
 //! # Ok(()) }
 //! ```
+//!
+//! ## Errors and structured output
+//!
+//! A tool returning `Err(_)` — or being handed arguments that fail to
+//! deserialize — is reported to the client with `isError: true`, so the model
+//! is told the call failed instead of being handed an error string that looks
+//! like a successful result.
+//!
+//! Tools whose success type implements [`schemars::JsonSchema`] also advertise
+//! an `outputSchema` and return `structuredContent` alongside the text.
+//! Non-object types (numbers, strings, arrays) are wrapped as `{"result": …}`,
+//! since MCP requires structured content to be an object.
 
 use std::sync::Arc;
 
@@ -284,7 +296,7 @@ impl ServerHandler for McpService {
             let progress_token = context.meta.get_progress_token();
 
             let mut stream = tools.call(&name, arguments).await;
-            let mut final_result: Vec<AgentixContent> = Vec::new();
+            let mut final_result = crate::tool_trait::ToolResult::ok(Vec::new());
             let mut step: f64 = 0.0;
 
             while let Some(output) = stream.next().await {
@@ -303,14 +315,22 @@ impl ServerHandler for McpService {
                                 .await;
                         }
                     }
-                    ToolOutput::Result(v) => {
-                        final_result = v;
+                    other => {
+                        if let Some(result) = other.into_result() {
+                            final_result = result;
+                        }
                     }
                 }
             }
 
-            let mut contents: Vec<Content> = Vec::with_capacity(final_result.len());
-            for c in final_result {
+            let crate::tool_trait::ToolResult {
+                content: final_content,
+                structured,
+                is_error,
+            } = final_result;
+
+            let mut contents: Vec<Content> = Vec::with_capacity(final_content.len());
+            for c in final_content {
                 contents.push(match c {
                     AgentixContent::Text { text } => Content::text(text),
                     AgentixContent::Image(img) => {
@@ -342,7 +362,13 @@ impl ServerHandler for McpService {
                     }
                 });
             }
-            Ok(CallToolResult::success(contents))
+            let mut result = if is_error {
+                CallToolResult::error(contents)
+            } else {
+                CallToolResult::success(contents)
+            };
+            result.structured_content = structured;
+            Ok(result)
         }
     }
 
@@ -351,12 +377,16 @@ impl ServerHandler for McpService {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        let mut output_schemas = self.tools.output_schemas();
         let tools: Vec<McpToolDef> = self
             .tools
             .raw_tools()
             .into_iter()
             .map(|raw| {
-                McpToolDef::new(
+                let output_schema = output_schemas
+                    .remove(&raw.function.name)
+                    .and_then(|s| s.as_object().cloned());
+                let mut tool = McpToolDef::new(
                     raw.function.name,
                     raw.function.description.unwrap_or_default(),
                     raw.function
@@ -364,7 +394,9 @@ impl ServerHandler for McpService {
                         .as_object()
                         .cloned()
                         .unwrap_or_default(),
-                )
+                );
+                tool.output_schema = output_schema.map(Arc::new);
+                tool
             })
             .collect();
 

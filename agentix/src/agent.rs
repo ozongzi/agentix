@@ -237,8 +237,13 @@ pub fn agent(
                             .map(move |output| match output {
                                 ToolOutput::Progress(p) =>
                                     ToolMsg::Progress { id: id.clone(), name: name.clone(), msg: p },
-                                ToolOutput::Result(v) =>
-                                    ToolMsg::Result { id: id.clone(), name: name.clone(), value: v },
+                                // Errors reach the model as their content blocks,
+                                // same as any other result.
+                                other => ToolMsg::Result {
+                                    id: id.clone(),
+                                    name: name.clone(),
+                                    value: other.into_result().map(|r| r.content).unwrap_or_default(),
+                                },
                             })
                     }).flatten();
                     Box::pin(stream) as futures::stream::BoxStream<'static, ToolMsg>
@@ -358,8 +363,8 @@ pub fn agent_turns(
                     let mut out = tools.call(&name, args).await;
                     let mut result: Vec<crate::request::Content> = Vec::new();
                     while let Some(o) = out.next().await {
-                        if let crate::tool_trait::ToolOutput::Result(v) = o {
-                            result = v;
+                        if let Some(r) = o.into_result() {
+                            result = r.content;
                         }
                     }
                     (id, result)

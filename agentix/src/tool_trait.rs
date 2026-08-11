@@ -6,12 +6,79 @@ use serde_json::Value;
 use serde_json::json;
 use std::collections::HashMap;
 
+/// The final outcome of a tool call.
+///
+/// Carries the pieces MCP distinguishes: human/model-readable `content`, an
+/// optional machine-readable mirror of it, and whether the call failed.
+#[derive(Debug, Clone)]
+pub struct ToolResult {
+    /// Content blocks shown to the model (and to the user, via the client).
+    pub content: Vec<Content>,
+    /// Machine-readable mirror of `content`, surfaced to MCP clients as
+    /// `structuredContent`. Always a JSON object when present, as the spec
+    /// requires; scalar and array results are wrapped as `{"result": …}`.
+    pub structured: Option<Value>,
+    /// Whether the call failed. Surfaced to MCP clients as `isError`, which is
+    /// how they know to tell the model the call did not succeed.
+    pub is_error: bool,
+}
+
+impl ToolResult {
+    /// A successful result carrying `content`.
+    pub fn ok(content: Vec<Content>) -> Self {
+        Self {
+            content,
+            structured: None,
+            is_error: false,
+        }
+    }
+
+    /// A failed result carrying `content`.
+    pub fn error(content: Vec<Content>) -> Self {
+        Self {
+            content,
+            structured: None,
+            is_error: true,
+        }
+    }
+
+    /// A failed result carrying the crate's standard `{"error": …}` payload.
+    pub fn error_text(message: impl std::fmt::Display) -> Self {
+        Self::error(vec![Content::text(
+            json!({ "error": message.to_string() }).to_string(),
+        )])
+    }
+
+    /// Attach a structured payload, wrapping non-objects as `{"result": …}`.
+    pub fn with_structured(mut self, value: Value) -> Self {
+        self.structured = Some(match value {
+            Value::Object(map) => Value::Object(map),
+            other => json!({ "result": other }),
+        });
+        self
+    }
+}
+
 /// Output emitted by a tool during its execution.
 pub enum ToolOutput {
     /// Intermediate progress (e.g. streaming stdout, reporting percentage).
     Progress(String),
-    /// The final result of the tool execution.
+    /// The final result of a successful tool execution. Shorthand for
+    /// `Outcome(ToolResult::ok(content))`.
     Result(Vec<Content>),
+    /// The final result, carrying error and structured-output metadata.
+    Outcome(ToolResult),
+}
+
+impl ToolOutput {
+    /// Normalize a final output into a [`ToolResult`]; `None` for progress.
+    pub fn into_result(self) -> Option<ToolResult> {
+        match self {
+            ToolOutput::Progress(_) => None,
+            ToolOutput::Result(content) => Some(ToolResult::ok(content)),
+            ToolOutput::Outcome(result) => Some(result),
+        }
+    }
 }
 
 /// The core trait that all agent tools must implement.
@@ -26,6 +93,15 @@ pub trait Tool: Send + Sync {
 
     /// Invoke the named tool with the given arguments and return a stream of outputs.
     async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput>;
+
+    /// JSON Schema for each tool's structured output, keyed by tool name.
+    ///
+    /// Surfaced to MCP clients as `outputSchema`. This is deliberately kept
+    /// out of [`Tool::raw_tools`] because that type is the on-the-wire tool
+    /// definition for LLM providers, which reject unknown fields.
+    fn output_schemas(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
 }
 
 #[async_trait]
@@ -35,6 +111,9 @@ impl Tool for std::sync::Arc<dyn Tool> {
     }
     async fn call(&self, name: &str, args: Value) -> BoxStream<'static, ToolOutput> {
         (**self).call(name, args).await
+    }
+    fn output_schemas(&self) -> HashMap<String, Value> {
+        (**self).output_schemas()
     }
 }
 
@@ -170,10 +249,14 @@ impl Tool for ToolBundle {
             }
         }
 
-        futures::stream::iter(vec![ToolOutput::Result(vec![Content::text(format!(
-            "error: unknown tool: {name}"
-        ))])])
+        futures::stream::iter(vec![ToolOutput::Outcome(ToolResult::error_text(format!(
+            "unknown tool: {name}"
+        )))])
         .boxed()
+    }
+
+    fn output_schemas(&self) -> HashMap<String, Value> {
+        self.tools.iter().flat_map(|t| t.output_schemas()).collect()
     }
 }
 
@@ -228,68 +311,144 @@ impl<T: Tool + 'static> std::ops::SubAssign<T> for ToolBundle {
 //   2. ToolResultResult  — Result<T, E>                        (fallible, via autoref)
 //   3. ToolResultValue   — T: Serialize                        (catch-all, via &&autoref)
 
-#[doc(hidden)]
-pub trait ToolResultContent {
-    fn __agentix_wrap(self) -> Vec<Content>;
+/// Serialize a tool's success value into a `structuredContent` payload.
+///
+/// `null` yields `None` — a tool returning nothing has nothing to structure.
+fn structured_of<T: serde::Serialize>(value: &T) -> Option<Value> {
+    match serde_json::to_value(value) {
+        Ok(Value::Null) | Err(_) => None,
+        Ok(Value::Object(map)) => Some(Value::Object(map)),
+        Ok(other) => Some(json!({ "result": other })),
+    }
 }
 
-/// `Vec<Content>` — pass through directly.
+#[doc(hidden)]
+pub trait ToolResultContent {
+    fn __agentix_wrap(self) -> ToolResult;
+}
+
+/// `Vec<Content>` — pass through directly. Opaque to structured output.
 impl ToolResultContent for Vec<Content> {
-    fn __agentix_wrap(self) -> Vec<Content> {
-        self
+    fn __agentix_wrap(self) -> ToolResult {
+        ToolResult::ok(self)
     }
 }
 
 /// `ImageContent` — wrap in a single-element vec.
 impl ToolResultContent for ImageContent {
-    fn __agentix_wrap(self) -> Vec<Content> {
-        vec![Content::Image(self)]
+    fn __agentix_wrap(self) -> ToolResult {
+        ToolResult::ok(vec![Content::Image(self)])
     }
 }
 
 /// `String` — wrap as text.
 impl ToolResultContent for String {
-    fn __agentix_wrap(self) -> Vec<Content> {
-        vec![Content::text(self)]
+    fn __agentix_wrap(self) -> ToolResult {
+        let structured = json!({ "result": self });
+        ToolResult {
+            content: vec![Content::text(self)],
+            structured: Some(structured),
+            is_error: false,
+        }
     }
 }
 
 /// `&str` — wrap as text.
 impl ToolResultContent for &str {
-    fn __agentix_wrap(self) -> Vec<Content> {
-        vec![Content::text(self)]
+    fn __agentix_wrap(self) -> ToolResult {
+        ToolResult {
+            content: vec![Content::text(self)],
+            structured: Some(json!({ "result": self })),
+            is_error: false,
+        }
     }
 }
 
 #[doc(hidden)]
 pub trait ToolResultResult {
-    fn __agentix_wrap(self) -> Vec<Content>;
+    fn __agentix_wrap(self) -> ToolResult;
 }
 
 impl<T: serde::Serialize, E: std::fmt::Display> ToolResultResult for Result<T, E> {
-    fn __agentix_wrap(self) -> Vec<Content> {
+    fn __agentix_wrap(self) -> ToolResult {
         match self {
-            Ok(v) => {
-                let text = serde_json::to_string(&v).unwrap_or_else(|e| {
-                    json!({ "error": format!("serialization error: {e}") }).to_string()
-                });
-                vec![Content::text(text)]
-            }
-            Err(e) => vec![Content::text(json!({ "error": e.to_string() }).to_string())],
+            Ok(v) => match serde_json::to_string(&v) {
+                Ok(text) => ToolResult {
+                    content: vec![Content::text(text)],
+                    structured: structured_of(&v),
+                    is_error: false,
+                },
+                Err(e) => ToolResult::error_text(format!("serialization error: {e}")),
+            },
+            Err(e) => ToolResult::error_text(e),
         }
     }
 }
 
 #[doc(hidden)]
 pub trait ToolResultValue {
-    fn __agentix_wrap(self) -> Vec<Content>;
+    fn __agentix_wrap(self) -> ToolResult;
 }
 
 impl<T: serde::Serialize> ToolResultValue for &T {
-    fn __agentix_wrap(self) -> Vec<Content> {
-        let text = serde_json::to_string(self).unwrap_or_else(|e| {
-            json!({ "error": format!("serialization error: {e}") }).to_string()
-        });
-        vec![Content::text(text)]
+    fn __agentix_wrap(self) -> ToolResult {
+        match serde_json::to_string(self) {
+            Ok(text) => ToolResult {
+                content: vec![Content::text(text)],
+                structured: structured_of(self),
+                is_error: false,
+            },
+            Err(e) => ToolResult::error_text(format!("serialization error: {e}")),
+        }
+    }
+}
+
+// ── Output schema (autoref specialization, same trick as above) ──────────────
+//
+// The generated `output_schemas()` calls this on `&PhantomData::<T>`, where `T`
+// is the tool's success type. These methods take `&self`, so the impl on the
+// *less* referenced type is the one probed first: `PhantomData<T>` wins when
+// `T: JsonSchema` holds, and everything else — notably `Vec<Content>` and
+// `ImageContent`, which are opaque content, and user types that only implement
+// `Serialize` — needs the extra autoref, lands on the fallback, and simply gets
+// no `outputSchema`.
+
+#[doc(hidden)]
+pub trait ToolOutputSchema {
+    fn __agentix_output_schema(&self) -> Option<Value>;
+}
+
+impl<T: schemars::JsonSchema> ToolOutputSchema for std::marker::PhantomData<T> {
+    fn __agentix_output_schema(&self) -> Option<Value> {
+        let mut settings = schemars::r#gen::SchemaSettings::draft07();
+        settings.inline_subschemas = true;
+        let mut generator = schemars::r#gen::SchemaGenerator::new(settings);
+
+        let mut schema = serde_json::to_value(T::json_schema(&mut generator)).ok()?;
+        // MCP requires `structuredContent` to be an object, so scalar and array
+        // success types are wrapped — matching `structured_of` above.
+        if schema.get("type").and_then(Value::as_str) != Some("object") {
+            schema = json!({
+                "type": "object",
+                "properties": { "result": schema },
+                "required": ["result"],
+            });
+        }
+        let defs = generator.take_definitions();
+        if !defs.is_empty() {
+            schema["$defs"] = serde_json::to_value(defs).ok()?;
+        }
+        Some(schema)
+    }
+}
+
+#[doc(hidden)]
+pub trait ToolOutputSchemaFallback {
+    fn __agentix_output_schema(&self) -> Option<Value>;
+}
+
+impl<T> ToolOutputSchemaFallback for &std::marker::PhantomData<T> {
+    fn __agentix_output_schema(&self) -> Option<Value> {
+        None
     }
 }

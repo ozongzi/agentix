@@ -1,3 +1,21 @@
+## [0.29.0]
+
+### Bug fixes
+
+- **MCP server: failed tool calls are now reported as failures.** `CallToolResult` was always built with `CallToolResult::success`, so a tool returning `Err(_)`, an argument that failed to deserialize, and an unknown tool name all reached the client as `isError: false` with the error text in the content block. Clients had no way to tell a failure from a successful result whose text happened to start with `{"error":`, and the model was told the call succeeded. All three paths now set `isError: true`. The `{"error": …}` text payload is unchanged, so the LLM-facing agent loop sees exactly what it saw before.
+- **MCP client: the remote server's `isError` and `structuredContent` are preserved.** `McpClient` flattened every response into a success; a remote tool failure was indistinguishable from a result. Transport errors and task panics are likewise now errors rather than successes.
+
+### New features
+
+- **MCP server: `outputSchema` and `structuredContent`.** Tools whose success type implements `schemars::JsonSchema` now advertise an `outputSchema` in `tools/list` and return `structuredContent` alongside the text content, so clients get a typed payload instead of re-parsing text. `Result<T, E>` uses the schema of `T`. Non-object types are wrapped as `{"result": …}` in both the schema and the payload, since MCP requires structured content to be an object. Success types without a `JsonSchema` impl — including `Vec<Content>` and `ImageContent`, which are deliberately opaque — declare no schema and are unaffected.
+
+### Breaking changes
+
+- **`ToolOutput` has a third variant, `Outcome(ToolResult)`**, carrying the error flag and structured payload; `#[tool]` now emits it in place of `Result(_)`. `ToolOutput::Result(content)` still exists and still means "succeeded with this content", so `#[streaming_tool]` bodies that yield it keep working, but exhaustive `match`es over `ToolOutput` need the new arm. `ToolOutput::into_result()` normalizes either final variant into a `ToolResult` and is the recommended way to consume the stream.
+- **`Tool` has a new `output_schemas()` method** with a default empty implementation, so hand-written `Tool` impls keep compiling. It is deliberately separate from `raw_tools()`, which is the on-the-wire tool definition for LLM providers and cannot carry an output schema.
+
+---
+
 ## [0.27.0] - 2026-06-10
 
 ### Breaking changes

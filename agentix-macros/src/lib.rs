@@ -121,6 +121,27 @@ fn is_option(ty: &Type) -> bool {
     false
 }
 
+/// The type a tool yields on success: `T` for `-> T`, and `T` for
+/// `-> Result<T, E>`. Returns `None` for `-> ()`, which has no output schema.
+///
+/// This is a syntactic match on `Result`, like [`is_option`] above — a type
+/// aliased to something else named `Result` is treated as fallible, which is
+/// harmless here since the schema is advisory.
+fn success_type(output: &syn::ReturnType) -> Option<Type> {
+    let syn::ReturnType::Type(_, ty) = output else {
+        return None;
+    };
+    if let Type::Path(tp) = &**ty
+        && let Some(seg) = tp.path.segments.last()
+        && seg.ident == "Result"
+        && let syn::PathArguments::AngleBracketed(args) = &seg.arguments
+        && let Some(syn::GenericArgument::Type(ok_ty)) = args.args.first()
+    {
+        return Some(ok_ty.clone());
+    }
+    Some((**ty).clone())
+}
+
 fn has_streaming_attr(attrs: &[syn::Attribute]) -> bool {
     attrs.iter().any(|a| a.path().is_ident("streaming"))
 }
@@ -267,6 +288,7 @@ fn tool_from_fn(
 
     let raw_tools_body = generate_raw_tools(&method);
     let call_arm = generate_call_arm(&method);
+    let output_schema = generate_output_schema(&method);
 
     let expanded = quote! {
         #(#schema_errors)*
@@ -279,13 +301,19 @@ fn tool_from_fn(
                 vec![#raw_tools_body]
             }
 
+            fn output_schemas(&self) -> std::collections::HashMap<String, agentix::serde_json::Value> {
+                let mut __schemas = std::collections::HashMap::new();
+                #output_schema
+                __schemas
+            }
+
             async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::futures::stream::BoxStream<'static, agentix::tool_trait::ToolOutput> {
                 match name {
                     #call_arm
                     _ => {
-                        let err = format!("{{\"error\":\"unknown tool: {}\"}}", name);
                         use agentix::futures::StreamExt;
-                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(vec![agentix::request::Content::text(err)])]).boxed()
+                        let err = agentix::tool_trait::ToolResult::error_text(format!("unknown tool: {}", name));
+                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Outcome(err)]).boxed()
                     }
                 }
             }
@@ -372,6 +400,7 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     let raw_tools_body = tool_methods.iter().map(generate_raw_tools);
     let call_arms = tool_methods.iter().map(generate_call_arm);
+    let output_schemas = tool_methods.iter().map(generate_output_schema);
     let self_ty = &item_impl.self_ty;
 
     let expanded = quote! {
@@ -382,13 +411,19 @@ fn tool_from_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
                 vec![#(#raw_tools_body),*]
             }
 
+            fn output_schemas(&self) -> std::collections::HashMap<String, agentix::serde_json::Value> {
+                let mut __schemas = std::collections::HashMap::new();
+                #(#output_schemas)*
+                __schemas
+            }
+
             async fn call(&self, name: &str, args: agentix::serde_json::Value) -> agentix::futures::stream::BoxStream<'static, agentix::tool_trait::ToolOutput> {
                 match name {
                     #(#call_arms)*
                     _ => {
-                        let err = format!("{{\"error\":\"unknown tool: {}\"}}", name);
                         use agentix::futures::StreamExt;
-                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(vec![agentix::request::Content::text(err)])]).boxed()
+                        let err = agentix::tool_trait::ToolResult::error_text(format!("unknown tool: {}", name));
+                        agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Outcome(err)]).boxed()
                     }
                 }
             }
@@ -459,6 +494,26 @@ fn generate_raw_tools(method: &ToolMethod) -> proc_macro2::TokenStream {
     }}
 }
 
+/// One `output_schemas()` entry, if the tool's success type has a JSON Schema.
+///
+/// Streaming tools yield `ToolOutput` directly and have no single success type,
+/// so they get no entry.
+fn generate_output_schema(method: &ToolMethod) -> proc_macro2::TokenStream {
+    let tool_name = &method.tool_name;
+    match (method.streaming, success_type(&method.output)) {
+        (false, Some(ty)) => quote! {{
+            #[allow(unused_imports)]
+            use agentix::tool_trait::{ToolOutputSchema, ToolOutputSchemaFallback};
+            if let Some(schema) =
+                (&::std::marker::PhantomData::<#ty>).__agentix_output_schema()
+            {
+                __schemas.insert(#tool_name.to_string(), schema);
+            }
+        }},
+        _ => quote! {},
+    }
+}
+
 fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
     let tool_name = &method.tool_name;
     let body = &method.body;
@@ -473,9 +528,11 @@ fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
             ) {
                 Ok(v) => v,
                 Err(e) => {
-                    let err = format!("{{\"error\":\"invalid argument '{}': {}\"}}", #pname_str, e);
                     use agentix::futures::StreamExt;
-                    return agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(vec![agentix::request::Content::text(err)])]).boxed();
+                    let err = agentix::tool_trait::ToolResult::error_text(
+                        format!("invalid argument '{}': {}", #pname_str, e)
+                    );
+                    return agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Outcome(err)]).boxed();
                 }
             };
         }
@@ -507,7 +564,7 @@ fn generate_call_arm(method: &ToolMethod) -> proc_macro2::TokenStream {
                 use agentix::tool_trait::{ToolResultContent, ToolResultResult, ToolResultValue};
 
                 let __val = (__result).__agentix_wrap();
-                agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Result(__val)]).boxed()
+                agentix::futures::stream::iter(vec![agentix::tool_trait::ToolOutput::Outcome(__val)]).boxed()
             }
         }
     }
