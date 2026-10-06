@@ -10,7 +10,7 @@
 //!   cargo run --example 13_codex_agent_multiturn --features codex
 //!
 //! Optional:
-//!   AGENTIX_CODEX_MODEL=gpt-5.5 cargo run --example 13_codex_agent_multiturn --features codex
+//!   AGENTIX_CODEX_MODEL=gpt-6.1-sol cargo run --example 13_codex_agent_multiturn --features codex
 
 use agentix::{
     AgentEvent, Content, Message, ReasoningEffort, Request, ToolBundle, UserContent, agent, tool,
@@ -96,7 +96,7 @@ fn text(content: &[Content]) -> String {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let model = std::env::var("AGENTIX_CODEX_MODEL").unwrap_or_else(|_| "gpt-5.5".into());
+    let model = std::env::var("AGENTIX_CODEX_MODEL").unwrap_or_else(|_| "gpt-6.1-sol".into());
     let http = reqwest::Client::new();
     let calls = CallLog::default();
     let tools = ToolBundle::default()

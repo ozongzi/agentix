@@ -35,7 +35,7 @@ fn base() -> Option<String> {
 }
 
 fn model() -> String {
-    std::env::var("MIMO_MODEL").unwrap_or_else(|_| "mimo-v2.5-pro".into())
+    std::env::var("MIMO_MODEL").unwrap_or_else(|_| "mimo-v2.6-pro".into())
 }
 
 fn req(api_key: &str) -> Request {

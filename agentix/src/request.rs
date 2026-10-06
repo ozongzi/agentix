@@ -12,7 +12,7 @@
 //! let http = reqwest::Client::new();
 //!
 //! let mut stream = Request::new(Provider::DeepSeek, "sk-...")
-//!     .model("deepseek-chat")
+//!     .model("deepseek-flash")
 //!     .system_prompt("You are helpful.")
 //!     .user("Hello!")
 //!     .stream(&http)
@@ -343,22 +343,30 @@ impl Provider {
     }
 
     /// Default model for this provider.
+    ///
+    /// Each entry is the provider's current newest flagship, taken from that
+    /// provider's own documentation (not the OpenRouter catalog, whose slugs
+    /// differ from native model IDs — e.g. `deepseek/deepseek-v4.1-flash` is
+    /// `deepseek-flash` on the DeepSeek API). `OpenRouter` keeps the
+    /// `openrouter/auto` router, which already resolves to a current model per
+    /// request, and `ClaudeCode` uses the CLI's `opus` alias, which tracks the
+    /// latest Opus release on its own.
     pub fn default_model(&self) -> &'static str {
         match self {
-            Provider::DeepSeek => "deepseek-chat",
-            Provider::OpenAI => "gpt-4o",
-            Provider::Anthropic => "claude-sonnet-4-20250514",
-            Provider::Gemini => "gemini-2.0-flash",
-            Provider::Kimi => "kimi-k2.5",
-            Provider::Glm => "glm-5",
-            Provider::Minimax => "MiniMax-M2.7",
-            Provider::Mimo => "mimo-v2.5-pro",
-            Provider::Grok => "grok-4",
+            Provider::DeepSeek => "deepseek-flash",
+            Provider::OpenAI => "gpt-6.1-sol",
+            Provider::Anthropic => "claude-opus-5-5",
+            Provider::Gemini => "gemini-3.8-flash",
+            Provider::Kimi => "kimi-k3",
+            Provider::Glm => "glm-5.3",
+            Provider::Minimax => "MiniMax-M3",
+            Provider::Mimo => "mimo-v2.6-pro",
+            Provider::Grok => "grok-4.7",
             Provider::OpenRouter => "openrouter/auto",
             #[cfg(feature = "claude-code")]
-            Provider::ClaudeCode => "sonnet",
+            Provider::ClaudeCode => "opus",
             #[cfg(feature = "codex")]
-            Provider::Codex => "gpt-5.5",
+            Provider::Codex => "gpt-6.1-sol",
         }
     }
 }
@@ -422,7 +430,7 @@ pub struct Request {
     pub base_url: String,
 
     // ── Model & messages ─────────────────────────────────────────────────
-    /// Model identifier (e.g. `"deepseek-chat"`, `"gpt-4o"`).
+    /// Model identifier (e.g. `"deepseek-flash"`, `"gpt-6.1-sol"`).
     pub model: String,
     /// Optional system prompt.
     pub system_message: Option<String>,

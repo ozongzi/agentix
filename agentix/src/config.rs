@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 pub struct AgentConfig {
     /// Provider API base URL (e.g. `"https://api.deepseek.com"`).
     pub base_url: String,
-    /// Model identifier (e.g. `"deepseek-chat"`, `"gpt-4o"`).
+    /// Model identifier (e.g. `"deepseek-flash"`, `"gpt-6.1-sol"`).
     pub model: String,
     /// Optional system prompt prepended to every request.
     pub system_prompt: Option<String>,

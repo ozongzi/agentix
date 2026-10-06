@@ -21,7 +21,7 @@ mod provider_defaults {
     fn deepseek_defaults() {
         let r = Request::new(Provider::DeepSeek, "sk-test");
         assert_eq!(r.provider, Provider::DeepSeek);
-        assert_eq!(r.model, "deepseek-chat");
+        assert_eq!(r.model, "deepseek-flash");
         assert_eq!(r.base_url, "https://api.deepseek.com");
         assert!(r.system_message.is_none());
         assert!(r.max_tokens.is_none());
@@ -31,26 +31,26 @@ mod provider_defaults {
     #[test]
     fn openai_defaults() {
         let r = Request::new(Provider::OpenAI, "sk-test");
-        assert_eq!(r.model, "gpt-4o");
+        assert_eq!(r.model, "gpt-6.1-sol");
     }
 
     #[test]
     fn anthropic_defaults() {
         let r = Request::new(Provider::Anthropic, "sk-test");
-        assert_eq!(r.model, "claude-sonnet-4-20250514");
+        assert_eq!(r.model, "claude-opus-5-5");
     }
 
     #[test]
     fn gemini_defaults() {
         let r = Request::new(Provider::Gemini, "sk-test");
-        assert_eq!(r.model, "gemini-2.0-flash");
+        assert_eq!(r.model, "gemini-3.8-flash");
     }
 
     #[test]
     fn mimo_defaults() {
         let r = Request::new(Provider::Mimo, "sk-test");
         assert_eq!(r.provider, Provider::Mimo);
-        assert_eq!(r.model, "mimo-v2.5-pro");
+        assert_eq!(r.model, "mimo-v2.6-pro");
         assert_eq!(r.base_url, "https://api.xiaomimimo.com/anthropic");
     }
 
@@ -191,14 +191,20 @@ mod provider_enum {
 
     #[test]
     fn default_models() {
-        assert_eq!(Provider::DeepSeek.default_model(), "deepseek-chat");
-        assert_eq!(Provider::OpenAI.default_model(), "gpt-4o");
-        assert_eq!(
-            Provider::Anthropic.default_model(),
-            "claude-sonnet-4-20250514"
-        );
-        assert_eq!(Provider::Gemini.default_model(), "gemini-2.0-flash");
-        assert_eq!(Provider::Mimo.default_model(), "mimo-v2.5-pro");
+        assert_eq!(Provider::DeepSeek.default_model(), "deepseek-flash");
+        assert_eq!(Provider::OpenAI.default_model(), "gpt-6.1-sol");
+        assert_eq!(Provider::Anthropic.default_model(), "claude-opus-5-5");
+        assert_eq!(Provider::Gemini.default_model(), "gemini-3.8-flash");
+        assert_eq!(Provider::Kimi.default_model(), "kimi-k3");
+        assert_eq!(Provider::Glm.default_model(), "glm-5.3");
+        assert_eq!(Provider::Minimax.default_model(), "MiniMax-M3");
+        assert_eq!(Provider::Mimo.default_model(), "mimo-v2.6-pro");
+        assert_eq!(Provider::Grok.default_model(), "grok-4.7");
+        assert_eq!(Provider::OpenRouter.default_model(), "openrouter/auto");
+        #[cfg(feature = "claude-code")]
+        assert_eq!(Provider::ClaudeCode.default_model(), "opus");
+        #[cfg(feature = "codex")]
+        assert_eq!(Provider::Codex.default_model(), "gpt-6.1-sol");
     }
 
     #[test]

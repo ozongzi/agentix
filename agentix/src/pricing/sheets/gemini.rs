@@ -1,12 +1,18 @@
 //! Google Gemini price sheets (USD per 1M tokens).
 //!
-//! Snapshot of <https://ai.google.dev/gemini-api/docs/pricing>, 2026-07.
+//! Snapshot of <https://ai.google.dev/gemini-api/docs/pricing>, 2026-10.
 //! Billing rules: `cachedContentTokenCount` is a subset of the prompt (billed
 //! at the cache rate, ~10% of input); thinking tokens are additive to
 //! candidates and billed at the output rate; Pro-class models tier both
 //! rates by prompt length (≤200k vs >200k, total prompt incl. cache).
 //! Explicit caches additionally pay per-token-hour storage — NOT modeled
 //! here (implicit caching has no storage charge). Batch = 50%.
+//!
+//! `gemini-3.8-flash` is flat (no length tiers) and currently on promotional
+//! pricing: $0.75 in / $3.75 out **through 2026-12-31**, doubling to $1.50 /
+//! $7.50 on 2027-01-01. This sheet models the promotional rate. Per-modality
+//! audio rates for 3.8 Flash were not published on the pricing table, so audio
+//! input defaults to the text input rate.
 
 use crate::pricing::{PriceSheet, Rates, Tier, dec};
 use rusty_money::iso;
@@ -41,7 +47,18 @@ pub fn sheet(model: &str) -> Option<PriceSheet> {
                 },
             ],
         })
+    } else if m.contains("3.8-flash") {
+        Some(PriceSheet::flat(
+            iso::USD,
+            Rates {
+                input: dec("0.75"),
+                cache_read: dec("0.075"),
+                output: dec("3.75"),
+                ..Default::default()
+            },
+        ))
     } else if m.contains("flash") {
+        // Gemini 2.x / 3.x Flash baseline.
         Some(PriceSheet::flat(
             iso::USD,
             Rates {

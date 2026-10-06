@@ -21,31 +21,31 @@ fn quickstart_compiles() {
 #[test]
 fn provider_constructors() {
     let req = Request::new(Provider::DeepSeek, "sk-...");
-    assert_eq!(req.model, "deepseek-chat");
+    assert_eq!(req.model, "deepseek-flash");
 
     let req = Request::new(Provider::OpenAI, "sk-...");
-    assert_eq!(req.model, "gpt-4o");
+    assert_eq!(req.model, "gpt-6.1-sol");
 
     let req = Request::new(Provider::Anthropic, "sk-ant-...");
-    assert_eq!(req.model, "claude-sonnet-4-20250514");
+    assert_eq!(req.model, "claude-opus-5-5");
 
     let req = Request::new(Provider::Gemini, "AIza...");
-    assert_eq!(req.model, "gemini-2.0-flash");
+    assert_eq!(req.model, "gemini-3.8-flash");
 
     let req = Request::new(Provider::Kimi, "sk-...");
-    assert_eq!(req.model, "kimi-k2.5");
+    assert_eq!(req.model, "kimi-k3");
 
     let req = Request::new(Provider::Glm, "sk-...");
-    assert_eq!(req.model, "glm-5");
+    assert_eq!(req.model, "glm-5.3");
 
     let req = Request::new(Provider::Minimax, "sk-...");
-    assert_eq!(req.model, "MiniMax-M2.7");
+    assert_eq!(req.model, "MiniMax-M3");
 
     let req = Request::new(Provider::Mimo, "sk-...");
-    assert_eq!(req.model, "mimo-v2.5-pro");
+    assert_eq!(req.model, "mimo-v2.6-pro");
 
     let req = Request::new(Provider::Grok, "sk-...");
-    assert_eq!(req.model, "grok-4");
+    assert_eq!(req.model, "grok-4.7");
 
     let req = Request::new(Provider::OpenRouter, "sk-or-...");
     assert_eq!(req.model, "openrouter/auto");

@@ -1,3 +1,49 @@
+## [0.30.0]
+
+### Breaking changes
+
+- **Default models bumped to each provider's current flagship.** `Provider::default_model()` — and therefore every `Request::new(provider, key)` that never calls `.model(...)` — now selects a much newer model, so existing callers silently change both model and price. Call `.model("…")` explicitly to pin the previous behaviour.
+
+  | Provider | Was | Now |
+  |---|---|---|
+  | DeepSeek | `deepseek-chat` | `deepseek-flash` |
+  | OpenAI | `gpt-4o` | `gpt-6.1-sol` |
+  | Anthropic | `claude-sonnet-4-20250514` | `claude-opus-5-5` |
+  | Gemini | `gemini-2.0-flash` | `gemini-3.8-flash` |
+  | Kimi | `kimi-k2.5` | `kimi-k3` |
+  | GLM | `glm-5` | `glm-5.3` |
+  | MiniMax | `MiniMax-M2.7` | `MiniMax-M3` |
+  | Mimo | `mimo-v2.5-pro` | `mimo-v2.6-pro` |
+  | Grok | `grok-4` | `grok-4.7` |
+  | Claude Code | `sonnet` | `opus` |
+  | Codex | `gpt-5.5` | `gpt-6.1-sol` |
+
+  `OpenRouter` still defaults to `openrouter/auto`, which already resolves to a current model per request, and the Claude Code default remains an alias, so it keeps tracking the newest Opus without further bumps. The IDs come from each provider's own model documentation rather than the OpenRouter catalog, whose slugs are gateway-specific — `deepseek/deepseek-v4.1-flash` is `deepseek-flash` on the DeepSeek API.
+
+### Bug fixes
+
+- **Price sheets: the current flagship models are now priced at all.** `gpt-6.1-sol`, `gpt-6-astra`, `gemini-3.8-flash`, `grok-4.7`, `glm-5.3`, `kimi-k3` and `MiniMax-M3` previously matched no branch — `gpt-6.1-sol` in particular resolved to no sheet, so `Cost` could never be computed for the new OpenAI default.
+- **OpenAI: the long-context tier was missing entirely.** Every current model re-tiers the whole request above 272K input tokens; the sheet modelled one flat rate, underestimating long prompts by 2×. Cached reads are also per-model — 0.05× input on `gpt-6.1-sol` versus 0.1× elsewhere — rather than the single 0.1× ratio assumed before.
+- **Anthropic: Opus and Sonnet got *cheaper* at the 5 generation** ($5/$25 → $4/$20, $3/$15 → $2/$10), so the family-wide `opus`/`sonnet` substring match over-charged the new models while the 4.x rates still had to be preserved. Two documented cache-read exceptions are now modelled: 0.025× on Fable 5.1 / Mythos 5.1 and 0.05× on Opus 5.5.
+- **DeepSeek: the off-peak program has not ended.** The 2026-07 sheet asserted flat pricing; DeepSeek actually bills peak and off-peak rates with off-peak at exactly half. The sheet now models the peak (higher) rate — the conservative choice for budget enforcement — and documents the halving.
+- **Kimi: K3 bills cache writes separately** by TTL ($3/1M for 5min, $6/1M for 1h), which the sheet dropped entirely. The K2.x line no longer inherits K3 rates either.
+- **GLM: `flash` was assumed free.** Only the 4.x Flash tiers are; `glm-5.3-flash` ($0.15) and `glm-5.3-flashx` ($0.37) are paid SKUs, so the old substring match priced them at zero.
+- **MiniMax: the >512k M3 tier carried the wrong cache-read rate** ($0.06 instead of $0.12), and M3 was charged the M2.7 cache-write rate of $0.375 that MiniMax does not publish for M3.
+- **MiMo: `ultraspeed` was under-priced by 3.3×** (¥9/¥0.075/¥18 instead of ¥30/¥0.25/¥60).
+
+### New features
+
+- **A `pricing_defaults` integration test** pins the invariant that every provider's default model resolves to a built-in price sheet, so a future default bump cannot silently lose cost estimation. OpenRouter is exempt by design — it relies on the reported cost or the dynamic catalog.
+- **A `pricing_sheets` integration test** asserts the rates above: tier boundaries, the two Anthropic cache-read exceptions, Kimi's separate write fee, MiniMax's missing write rate. A wrong price still yields a well-formed `Cost`, so without such a test a stale number is undetectable.
+
+### Other
+
+- Backfilled the sheets' snapshot headers to 2026-10 and recorded each one's source caveats. The Grok figures remain approximations mirrored from the OpenRouter catalog — `docs.x.ai` was unreachable from the build environment on every attempt, as that sheet has documented since 2026-07. Prefer a provider-reported cost where it exists.
+- `gemini-3.8-flash` is on promotional pricing ($0.75 in / $3.75 out) that doubles on 2027-01-01; the sheet models the promotional rate and notes the change.
+- Documented two known gaps rather than silently guessing: MiniMax's Anthropic-compatible base URL is quoted as `api.minimax.io` / `api.minimax.cn` in current docs while the provider still ships `api.minimaxi.com`, and per-modality audio rates for Gemini 3.8 Flash are not published, so audio input defaults to the text rate.
+
+---
+
 ## [0.29.0]
 
 ### Bug fixes

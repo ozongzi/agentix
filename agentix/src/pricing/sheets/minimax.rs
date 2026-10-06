@@ -1,9 +1,12 @@
 //! MiniMax price sheets (USD per 1M tokens, international platform).
 //!
 //! Snapshot of <https://platform.minimax.io/docs/guides/pricing-paygo>,
-//! 2026-07. Billing rules: Anthropic-additive usage semantics
-//! (`input_tokens` excludes cache tokens); explicit cache read and write
-//! rates. MiniMax-M3 tiers by prompt length at 512k.
+//! 2026-10. Billing rules: Anthropic-additive usage semantics
+//! (`input_tokens` excludes cache tokens). MiniMax-M3 tiers by prompt length
+//! at 512k, and the listed rates already include a permanent 50% discount.
+//! M3 publishes **no cache-write** rate (only prompt-caching reads); the
+//! $0.375 / 1M write rate below applies to M2.7 and the legacy M2.x line
+//! only. A `service_tier=priority` request bills 1.5× standard — not modeled.
 
 use crate::pricing::{PriceSheet, Rates, Tier, dec};
 use rusty_money::iso;
@@ -26,14 +29,18 @@ pub fn sheet(model: &str) -> Option<PriceSheet> {
             tiers: vec![
                 Tier {
                     up_to: Some(512_000),
-                    rates: m2_rates("0.06"),
+                    rates: Rates {
+                        input: dec("0.30"),
+                        cache_read: dec("0.06"),
+                        output: dec("1.20"),
+                        ..Default::default()
+                    },
                 },
                 Tier {
                     up_to: None,
                     rates: Rates {
                         input: dec("0.60"),
-                        cache_read: dec("0.06"),
-                        cache_write_5m: dec("0.375"),
+                        cache_read: dec("0.12"),
                         output: dec("2.40"),
                         ..Default::default()
                     },
